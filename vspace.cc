@@ -13,6 +13,7 @@ size_t VMem::filesize() {
   fstat(fd, &stat);
   return stat.st_size;
 }
+
 void VMem::init(int fd) {
   this->fd = fd;
   for (int i = 0; i < MAX_SEGMENTS; i++)
@@ -22,6 +23,7 @@ void VMem::init(int fd) {
   unlock_metapage();
   freelist = metapage->freelist;
 }
+
 void VMem::init() {
   FILE *fp = tmpfile();
   init(fileno(fp));
@@ -29,10 +31,12 @@ void VMem::init() {
   pipe(channel);
   metapage->process_info[0].pid = getpid();
   metapage->process_info[0].pipe_fd = channel[1];
-  current_process = getpid();
+  processes[0].fd = channel[1];
+  current_process = 0;
   signal_fd = channel[0];
   fcntl(signal_fd, FD_CLOEXEC);
 }
+
 bool VMem::init(const char *path) {
   int fd = open(path, O_RDWR | O_CREAT, 0600);
   if (fd < 0)
@@ -43,6 +47,7 @@ bool VMem::init(const char *path) {
   unlock_metapage();
   return true;
 }
+
 void *VMem::mmap_segment(int seg) {
   lock_metapage();
   void *result = mmap(NULL, SEGMENT_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED,
@@ -52,6 +57,7 @@ void *VMem::mmap_segment(int seg) {
   unlock_metapage();
   return result;
 }
+
 void VMem::add_segment() {
   int seg = metapage->segment_count++;
   ftruncate(fd, METABLOCK_SIZE + metapage->segment_count * SEGMENT_SIZE);
@@ -202,7 +208,7 @@ void init_metapage(bool create) {
 void send_signal(int processno) {
   static char buf[1] = "";
   // TODO: init processes[] on demand.
-  write(vmem.processes[processno]->fd, buf, 1);
+  write(vmem.processes[processno].fd, buf, 1);
 }
 
 void wait_signal() {
@@ -212,7 +218,7 @@ void wait_signal() {
 
 } // namespace internals
 
-ForkResult fork_process() {
+pid_t fork_process() {
   using namespace internals;
   lock_metapage();
   for (int i = 0; i < MAX_PROCESS; i++) {
@@ -224,7 +230,6 @@ ForkResult fork_process() {
       pid_t pid = fork();
       if (pid < 0) {
         // error
-        return ForkResult(FORK_FAILED, -1);
       } else if (pid == 0) {
         // child process
         int parent = vmem.current_process;
@@ -233,19 +238,17 @@ ForkResult fork_process() {
         vmem.signal_fd = channel[0];
         unlock_metapage();
         send_signal(parent);
-        return ForkResult(CHILD_PROCESS, getpid());
       } else {
         // parent process
         close(channel[0]);
         wait_signal();
         // child has unlocked metapage, so we don't need to.
-        return ForkResult(PARENT_PROCESS, pid);
       }
+      return pid;
     }
-    return ForkResult(FORK_FAILED, -1);
   }
   unlock_metapage();
-  return ForkResult(FORK_FAILED, -1);
+  return -1;
 }
 
 } // namespace vspace

@@ -83,9 +83,7 @@ struct MetaPage {
 };
 
 struct Process {
-  int number;
   int fd;
-  Process(int number, ProcessInfo info);
 };
 
 struct Block {
@@ -141,7 +139,7 @@ struct VMem {
   int signal_fd; // fd where the current process receives control information
   vaddr_t *freelist; // reference to metapage information
   VSeg segments[MAX_SEGMENTS];
-  Process *processes[MAX_PROCESS];
+  Process processes[MAX_PROCESS];
   inline VSeg segment(vaddr_t vaddr) {
     return segments[vaddr >> LOG2_SEGMENT_SIZE];
   }
@@ -267,6 +265,7 @@ public:
   }
   VRef<T> &operator=(VRef<T> other) {
     vaddr = other.vaddr;
+    return *this;
   }
   template <typename U>
   VRef<U> cast() {
@@ -274,7 +273,7 @@ public:
   }
   void free() {
     as_ptr()->~T(); // explicitly call destructor
-    vmem_free(vaddr);
+    internals::vmem_free(vaddr);
     vaddr = internals::VADDR_NULL;
   }
 };
@@ -420,16 +419,7 @@ static inline VRef<VString> vstring(const char *s, size_t len) {
   return vnew<VString>(s, len);
 }
 
-enum ForkResultType { FORK_FAILED, CHILD_PROCESS, PARENT_PROCESS };
-
-struct ForkResult {
-  ForkResultType type;
-  pid_t pid;
-  ForkResult(ForkResultType type, pid_t pid) : type(type), pid(pid) {
-  }
-};
-
-ForkResult fork_process();
+pid_t fork_process();
 
 typedef internals::Mutex Mutex;
 
@@ -442,7 +432,7 @@ private:
   Mutex _lock;
 
 public:
-  Semaphore(size_t value) :
+  Semaphore(size_t value = 0) :
       _owner(0), _head(0), _tail(0), _value(value), _lock() {
   }
   void post() {
@@ -484,25 +474,28 @@ private:
   };
   Semaphore _sem;
   Mutex _lock;
-  VRef<Node> head, tail;
+  VRef<Node> _head, _tail;
   void remove() {
-    VRef<Node> result = head;
-    if (head == tail) {
-      head = tail = vnull<Node>();
+    VRef<Node> result = _head;
+    if (_head == _tail) {
+      _head = _tail = vnull<Node>();
+      return;
     }
-    head = head->next;
+    _head = _head->next;
   }
   void add(VRef<Node> node) {
     node->next = vnull<Node>();
-    if (tail == NULL) {
-      head = tail = node;
+    if (_tail.is_null()) {
+      _head = _tail = node;
     } else {
-      tail->next = node;
-      tail = node;
+      _tail->next = node;
+      _tail = node;
     }
   }
 
 public:
+  Queue() : _sem(0), _lock() {
+  }
   void enqueue(VRef<T> item) {
     _lock.lock();
     VRef<Node> node = vnew<Node>();
@@ -514,8 +507,8 @@ public:
   VRef<T> dequeue() {
     _sem.wait();
     _lock.lock();
-    VRef<Node> node = head;
-    remove(head);
+    VRef<Node> node = _head;
+    remove();
     VRef<T> result = node->data;
     node.free();
     _lock.unlock();
@@ -524,8 +517,8 @@ public:
   void dequeue(VRef<T> &result) {
     _sem.wait();
     _lock.lock();
-    VRef<Node> node = head;
-    remove(head);
+    VRef<Node> node = _head;
+    remove(_head);
     result = node->data;
     node.free();
     _lock.unlock();
