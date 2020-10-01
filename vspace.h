@@ -78,7 +78,6 @@ struct ProcessInfo {
 struct MetaPage {
   size_t config_header[4];
   vaddr_t freelist[LOG2_SEGMENT_SIZE + 1];
-  char valid_segment[MAX_SEGMENTS];
   int segment_count;
   ProcessInfo process_info[MAX_PROCESS];
 };
@@ -167,7 +166,7 @@ struct VMem {
   void init();
   bool init(const char *path);
   void *mmap_segment(int seg);
-  void map_segments(int lastseg);
+  void add_segment();
 };
 
 static VMem &vmem = VMem::vmem_global;
