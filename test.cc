@@ -1,4 +1,4 @@
-#include "vspace.cc"
+#include "vspace.h"
 
 int main() {
   return 0;
