@@ -7,11 +7,13 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <assert.h>
+#include <new> // for placement new
 
 #if __cplusplus >= 201100
 #define HAVE_ATOMIC
 #include <atomic>
 #else
+#error __cplusplus
 #undef HAVE_ATOMIC
 #endif
 
@@ -101,6 +103,47 @@ struct Process {
   Process(int number, ProcessInfo info);
 };
 
+struct VSeg {
+  unsigned char *base;
+  inline Block *block_ptr(segaddr_t addr) {
+    return (Block *) (base + addr);
+  }
+  inline void *ptr(segaddr_t addr) {
+    return (void *) (base + addr);
+  }
+  VSeg() : base(NULL) {
+  }
+  VSeg(void *base) : base((unsigned char *) base) {
+  }
+};
+
+struct Block {
+  // the lowest bits of prev encode whether we are looking at
+  // an allocated or free block. For an allocared block, the
+  // lowest bits are 01. For a free block, they are 00 (for a
+  // null reference (== -1), they are 11.
+  // For allocated blocks, the higher bits encode the segment
+  // and the log2 of the block offset. This requires
+  // LOG2_MAX_SEGMENTS + log2(sizeof(vaddr_t) * 8) + 2 bits.
+  vaddr_t prev;
+  vaddr_t next;
+  bool is_free() {
+    return (prev & 3) == 1;
+  }
+  int level() {
+    return (int) (prev >> (LOG2_MAX_SEGMENTS + 2));
+  }
+  void mark_as_allocated(vaddr_t vaddr, int level) {
+    vaddr_t bits = level;
+    bits <<= LOG2_MAX_SEGMENTS;
+    bits |= vaddr >> LOG2_SEGMENT_SIZE;
+    bits <<= 2;
+    bits |= 1;
+    prev = bits;
+    next = 0;
+  }
+};
+
 struct VMem {
   static VMem vmem_global;
   MetaPage *metapage;
@@ -175,7 +218,7 @@ struct VMem {
     ensure_is_mapped(vaddr);
     return segment(vaddr).ptr(segaddr(vaddr));
   }
-  void *map_segments(int lastseg) {
+  void map_segments(int lastseg) {
     if (!metapage->valid_segment[lastseg]) {
       ftruncate(fd, METABLOCK_SIZE + (lastseg + 1) * SEGMENT_SIZE);
       while (metapage->segment_count <= lastseg) {
@@ -194,47 +237,6 @@ struct VMem {
 
 static VMem &vmem = VMem::vmem_global;
 
-struct Block {
-  // the lowest bits of prev encode whether we are looking at
-  // an allocated or free block. For an allocared block, the
-  // lowest bits are 01. For a free block, they are 00 (for a
-  // null reference (== -1), they are 11.
-  // For allocated blocks, the higher bits encode the segment
-  // and the log2 of the block offset. This requires
-  // LOG2_MAX_SEGMENTS + log2(sizeof(vaddr_t) * 8) + 2 bits.
-  vaddr_t prev;
-  vaddr_t next;
-  bool is_free() {
-    return (prev & 3) == 1;
-  }
-  int level() {
-    return (int) (prev >> (LOG2_MAX_SEGMENTS + 2));
-  }
-  void mark_as_allocated(vaddr_t vaddr, int level) {
-    vaddr_t bits = level;
-    bits <<= LOG2_MAX_SEGMENTS;
-    bits |= vaddr >> LOG2_SEGMENT_SIZE;
-    bits <<= 2;
-    bits |= 1;
-    prev = bits;
-    next = 0;
-  }
-};
-
-struct VSeg {
-  unsigned char *base;
-  inline Block *block_ptr(segaddr_t addr) {
-    return (Block *) (base + addr);
-  }
-  inline void *ptr(segaddr_t addr) {
-    return (void *) (base + addr);
-  }
-  VSeg() : base(NULL) {
-  }
-  VSeg(void *base) : base((unsigned char *) base) {
-  }
-};
-
 void lock_metapage() {
   lock_file(vmem.fd, 0);
 }
@@ -242,35 +244,6 @@ void lock_metapage() {
 void unlock_metapage() {
   unlock_file(vmem.fd, 0);
 }
-
-class Mutex {
-private:
-  int _owner;
-  int _locklevel;
-  vaddr_t _lock;
-
-public:
-  Mutex() : _owner(-1), _locklevel(0), _lock(vmem_alloc(1)) {
-  }
-  ~Mutex() {
-    vmem_free(_lock);
-  }
-  void lock() {
-    if (_owner == vmem.current_process) {
-      _locklevel++;
-    } else {
-      lock_file(vmem.fd, METABLOCK_SIZE + _lock);
-      _owner = vmem.current_process;
-      _locklevel = 1;
-    }
-  }
-  void unlock() {
-    if (--_locklevel == 0) {
-      assert(_owner == vmem.current_process);
-      unlock_file(vmem.fd, METABLOCK_SIZE + _lock);
-    }
-  }
-};
 
 void init_metapage(bool create) {
   if (create)
@@ -289,17 +262,6 @@ void init_metapage(bool create) {
   } else {
     assert(memcmp(vmem.metapage->config_header, config, sizeof(config)) != 0);
   }
-}
-
-void send_signal(int processno) {
-  static char buf[1] = "";
-  // TODO: init processes[] on demand.
-  write(vmem.processes[processno]->fd, buf, 1);
-}
-
-void wait_signal() {
-  char buf[1];
-  read(vmem.signal_fd, buf, 1);
 }
 
 static int find_level(size_t size) {
@@ -364,7 +326,7 @@ vaddr_t vmem_alloc(size_t size) {
     Block *block = vmem.block_ptr(blockaddr);
     vmem.freelist[flevel] = block->next;
     if (vmem.freelist[flevel] >= 0)
-      vmem.block_ptr(vmem.freelist[flevel])->prev == SEGADDR_NULL;
+      vmem.block_ptr(vmem.freelist[flevel])->prev = SEGADDR_NULL;
     segaddr_t blockaddr2 = blockaddr + (1 << (flevel - 1));
     Block *block2 = vmem.block_ptr(blockaddr2);
     block2->next = block->next;
@@ -389,29 +351,69 @@ vaddr_t allocated_ptr_to_vaddr(void *ptr) {
   return (seg << LOG2_SEGMENT_SIZE) | offset;
 }
 
+class Mutex {
+private:
+  int _owner;
+  int _locklevel;
+  vaddr_t _lock;
+
+public:
+  Mutex() : _owner(-1), _locklevel(0), _lock(vmem_alloc(1)) {
+  }
+  ~Mutex() {
+    vmem_free(_lock);
+  }
+  void lock() {
+    if (_owner == vmem.current_process) {
+      _locklevel++;
+    } else {
+      lock_file(vmem.fd, METABLOCK_SIZE + _lock);
+      _owner = vmem.current_process;
+      _locklevel = 1;
+    }
+  }
+  void unlock() {
+    if (--_locklevel == 0) {
+      assert(_owner == vmem.current_process);
+      unlock_file(vmem.fd, METABLOCK_SIZE + _lock);
+    }
+  }
+};
+
+void send_signal(int processno) {
+  static char buf[1] = "";
+  // TODO: init processes[] on demand.
+  write(vmem.processes[processno]->fd, buf, 1);
+}
+
+void wait_signal() {
+  char buf[1];
+  read(vmem.signal_fd, buf, 1);
+}
+
 }; // namespace internals
 
 template <typename T>
 struct VRef {
 private:
-  vaddr_t vaddr;
-  void *to_ptr() {
-    return vmem.to_ptr(vaddr);
-  }
+  internals::vaddr_t vaddr;
 
 public:
-  VRef() : vaddr(VADDR_NULL) {
+  VRef() : vaddr(internals::VADDR_NULL) {
   }
-  VRef(vaddr_t vaddr) : vaddr(vaddr) {
+  VRef(internals::vaddr_t vaddr) : vaddr(vaddr) {
   }
   operator bool() {
-    return pos != internals::VADDR_NULL;
+    return vaddr != internals::VADDR_NULL;
   }
   bool is_null() {
-    return pos == internals::VADDR_NULL;
+    return vaddr == internals::VADDR_NULL;
   }
   VRef(void *ptr) {
-    vaddr = allocated_ptr_to_vaddr(ptr);
+    vaddr = internals::allocated_ptr_to_vaddr(ptr);
+  }
+  void *to_ptr() {
+    return internals::vmem.to_ptr(vaddr);
   }
   T *as_ptr() {
     return (T *) to_ptr();
@@ -433,9 +435,9 @@ public:
     return VRef<U>(vaddr);
   }
   void free() {
-    as_ptr->~T(); // explicitly call destructor
+    as_ptr()->~T(); // explicitly call destructor
     vmem_free(vaddr);
-    vaddr = VADDR_NULL;
+    vaddr = internals::VADDR_NULL;
   }
 };
 
@@ -445,13 +447,13 @@ private:
   struct RefCount {
     std::atomic<ptrdiff_t> rc;
     T data;
-    static vaddr_t alloc() {
+    static internals::vaddr_t alloc() {
       return internals::vmem_alloc(sizeof(RefCount));
     }
   };
-  vaddr_t vaddr;
+  internals::vaddr_t vaddr;
   std::atomic<ptrdiff_t> &refcount() {
-    return ((RefCount *)(vmem.to_ptr(vaddr))->rc;
+    return ((RefCount *) (internals::vmem.to_ptr(vaddr)))->rc;
   }
   void retain() {
     refcount()++;
@@ -463,23 +465,22 @@ private:
     }
   }
   void *to_ptr() {
-    return &((RefCount *) (vmem.to_ptr(vaddr))->data);
+    return &((RefCount *) (internals::vmem.to_ptr(vaddr))->data);
   }
-  friend znew;
 
 public:
-  ZRef() : vaddr(VADDR_NULL) {
+  ZRef() : vaddr(internals::VADDR_NULL) {
   }
-  ZRef(vaddr_t vaddr) : vaddr(vaddr) {
+  ZRef(internals::vaddr_t vaddr) : vaddr(vaddr) {
   }
   operator bool() {
-    return pos != internals::VADDR_NULL;
+    return vaddr != internals::VADDR_NULL;
   }
   bool is_null() {
-    return pos == internals::VADDR_NULL;
+    return vaddr == internals::VADDR_NULL;
   }
   ZRef(void *ptr) {
-    vaddr = allocated_ptr_to_vaddr(ptr);
+    vaddr = internals::allocated_ptr_to_vaddr(ptr);
   }
   T *as_ptr() {
     return (T *) to_ptr();
@@ -501,47 +502,47 @@ public:
     return ZRef<U>(vaddr);
   }
   void free() {
-    as_ptr->~T(); // explicitly call destructor
+    as_ptr()->~T(); // explicitly call destructor
     vmem_free(vaddr);
-    vaddr = VADDR_NULL;
+    vaddr = internals::VADDR_NULL;
   }
 };
 
 template <typename T>
 VRef<T> vnull() {
-  return
+  return VRef<T>(internals::VADDR_NULL);
 }
 
 template <typename T>
 VRef<T> vnew() {
-  VRref<T> result = VRef<T>(vmem_alloc(sizeof(T)));
+  VRef<T> result = VRef<T>(internals::vmem_alloc(sizeof(T)));
   new (result.to_ptr()) T();
   return result;
 }
 
 template <typename T>
 VRef<T> vnew_uninitialized() {
-  VRref<T> result = VRef<T>(vmem_alloc(sizeof(T)));
+  VRef<T> result = VRef<T>(internals::vmem_alloc(sizeof(T)));
   return result;
 }
 
 template <typename T, typename Arg>
 VRef<T> vnew(Arg arg) {
-  VRref<T> result = VRef<T>(vmem_alloc(sizeof(T)));
+  VRef<T> result = VRef<T>(internals::vmem_alloc(sizeof(T)));
   new (result.to_ptr()) T(arg);
   return result;
 }
 
 template <typename T, typename Arg1, typename Arg2>
 VRef<T> vnew(Arg1 arg1, Arg2 arg2) {
-  VRref<T> result = VRef<T>(vmem_alloc(sizeof(T)));
+  VRef<T> result = VRef<T>(internals::vmem_alloc(sizeof(T)));
   new (result.to_ptr()) T(arg1, arg2);
   return result;
 }
 
 template <typename T, typename Arg1, typename Arg2, typename Arg3>
 VRef<T> vnew(Arg1 arg1, Arg2 arg2, Arg3 arg3) {
-  VRref<T> result = VRef<T>(vmem_alloc(sizeof(T)));
+  VRef<T> result = VRef<T>(internals::vmem_alloc(sizeof(T)));
   new (result.to_ptr()) T(arg1, arg2, arg3);
   return result;
 }
@@ -600,10 +601,10 @@ ForkResult fork_process() {
       fcntl(channel[1], FD_CLOEXEC);
       vmem.metapage->process_info[i].pipe_fd = channel[1];
       pid_t pid = fork();
-      if (fork < 0) {
+      if (pid < 0) {
         // error
         return ForkResult(FORK_FAILED, -1);
-      } else if (fork == 0) {
+      } else if (pid == 0) {
         // child process
         int parent = vmem.current_process;
         vmem.current_process = i;
@@ -620,10 +621,10 @@ ForkResult fork_process() {
         return ForkResult(PARENT_PROCESS, pid);
       }
     }
-    ForkResult result = { FORK_FAILED, -1 };
-    return;
+    return ForkResult(FORK_FAILED, -1);
   }
   unlock_metapage();
+  return ForkResult(FORK_FAILED, -1);
 }
 
 typedef internals::Mutex Mutex;
@@ -678,7 +679,7 @@ private:
     VRef<T> data;
   };
   Semaphore _sem;
-  Vref<int> _lock;
+  Mutex _lock;
   VRef<Node> head, tail;
   void remove() {
     VRef<Node> result = head;
@@ -716,7 +717,6 @@ public:
     _lock.unlock();
     return result;
   }
-  template <typename T>
   void dequeue(VRef<T> &result) {
     _sem.wait();
     _lock.lock();
@@ -729,3 +729,8 @@ public:
 };
 
 }; // namespace vspace
+
+namespace vspace { namespace internals {
+VMem VMem::vmem_global;
+} // namespace internal
+} // namespace vspace
