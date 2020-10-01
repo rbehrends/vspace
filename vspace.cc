@@ -100,7 +100,7 @@ void init_metapage(bool create) {
   if (create)
     ftruncate(vmem.fd, METABLOCK_SIZE);
   vmem.metapage = (MetaPage *) mmap(
-      NULL, METABLOCK_SIZE, vmem.fd, PROT_READ | PROT_WRITE, MAP_SHARED, 0);
+      NULL, METABLOCK_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, vmem.fd, 0);
   if (create) {
     memcpy(vmem.metapage->config_header, config, sizeof(config));
     for (int i = 0; i <= LOG2_SEGMENT_SIZE; i++) {

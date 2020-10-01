@@ -191,6 +191,8 @@ struct VMem {
     lock_metapage();
     void *result = mmap(NULL, SEGMENT_SIZE, PROT_READ | PROT_WRITE,
         MAP_SHARED, fd, METABLOCK_SIZE + seg * SEGMENT_SIZE);
+    if (result == MAP_FAILED)
+      perror("mmap");
     unlock_metapage();
     return NULL;
   }
