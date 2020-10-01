@@ -88,20 +88,6 @@ struct Process {
   Process(int number, ProcessInfo info);
 };
 
-struct VSeg {
-  unsigned char *base;
-  inline Block *block_ptr(segaddr_t addr) {
-    return (Block *) (base + addr);
-  }
-  inline void *ptr(segaddr_t addr) {
-    return (void *) (base + addr);
-  }
-  VSeg() : base(NULL) {
-  }
-  VSeg(void *base) : base((unsigned char *) base) {
-  }
-};
-
 struct Block {
   // the lowest bits of prev encode whether we are looking at
   // an allocated or free block. For an allocared block, the
@@ -113,7 +99,7 @@ struct Block {
   vaddr_t prev;
   vaddr_t next;
   bool is_free() {
-    return (prev & 3) == 1;
+    return (prev & 3) != 1;
   }
   int level() {
     return (int) (prev >> (LOG2_MAX_SEGMENTS + 2));
@@ -126,6 +112,24 @@ struct Block {
     bits |= 1;
     prev = bits;
     next = 0;
+  }
+};
+
+struct VSeg {
+  unsigned char *base;
+  inline Block *block_ptr(segaddr_t addr) {
+    return (Block *) (base + addr);
+  }
+  bool is_free(segaddr_t addr) {
+    Block *block = block_ptr(addr);
+    return block->is_free();
+  }
+  inline void *ptr(segaddr_t addr) {
+    return (void *) (base + addr);
+  }
+  VSeg() : base(NULL) {
+  }
+  VSeg(void *base) : base((unsigned char *) base) {
   }
 };
 
@@ -182,11 +186,6 @@ static inline int find_level(size_t size) {
 
 static inline segaddr_t find_buddy(segaddr_t addr, int level) {
   return addr ^ (1 << level);
-}
-
-static inline bool is_free(VSeg seg, segaddr_t addr) {
-  Block *block = seg.block_ptr(addr);
-  return block->is_free();
 }
 
 void vmem_free(vaddr_t vaddr);

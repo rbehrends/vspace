@@ -3,9 +3,17 @@
 int main() {
   using namespace vspace::internals;
   vmem.init();
-  for (int i = 0; i < 30; i++) {
-    vaddr_t addr = vmem_alloc(10);
-    printf("%ld\n", addr/32);
+  const int n = 10;
+  vaddr_t addr[n];
+  for (int i = 0; i < n; i++) {
+    addr[i] = vmem_alloc(10);
+  }
+  for (int i = 0; i < n; i++) {
+    vmem_free(addr[i]);
+  }
+  for (int i = 0; i < n; i++) {
+    vaddr_t a = vmem_alloc(10);
+    printf("%lu\n", a);
   }
   return 0;
 }

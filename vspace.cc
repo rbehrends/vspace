@@ -73,17 +73,22 @@ static void unlock_allocator() {
 
 void vmem_free(vaddr_t vaddr) {
   lock_allocator();
+  vaddr -= sizeof(Block);
   vmem.ensure_is_mapped(vaddr);
   VSeg seg = vmem.segment(vaddr);
   segaddr_t addr = vmem.segaddr(vaddr);
   int level = seg.block_ptr(addr)->level();
   segaddr_t buddy = find_buddy(addr, level);
-  while (level < LOG2_SEGMENT_SIZE && is_free(seg, buddy)) {
+  bool freed = false;
+  while (level < LOG2_SEGMENT_SIZE && seg.is_free(buddy)) {
     // buddy is free.
+    // remove buddy from freelist
     Block *block = seg.block_ptr(buddy);
     if (block->prev == VADDR_NULL) {
+      // head of free list
       vmem.freelist[level] = block->next;
     } else {
+      // inner node
       Block *prev = vmem.block_ptr(block->prev);
       Block *next = vmem.block_ptr(block->next);
       if (prev)
@@ -92,13 +97,24 @@ void vmem_free(vaddr_t vaddr) {
         next->prev = block->prev;
     }
     level++;
+    // insert joined block + buddy one level up
     if (buddy < addr)
       addr = buddy;
+    buddy = find_buddy(addr, level);
+    block = seg.block_ptr(addr);
+    block->prev = VADDR_NULL;
+    block->next = vmem.freelist[level];
+    vmem.freelist[level] = addr;
+    freed = true;
   }
-  Block *block = seg.block_ptr(addr);
-  block->prev = VADDR_NULL;
-  block->next = vmem.freelist[level];
-  vmem.freelist[level] = addr;
+  // Has the block not yet been freed as part of being
+  // merged? If not, free it now.
+  if (!freed) {
+    Block *block = seg.block_ptr(addr);
+    block->prev = VADDR_NULL;
+    block->next = vmem.freelist[level];
+    vmem.freelist[level] = addr;
+  }
   unlock_allocator();
 }
 
