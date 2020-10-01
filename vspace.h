@@ -147,80 +147,27 @@ struct VMem {
       return SEGADDR_NULL;
     return vaddr & SEGMENT_MASK;
   }
-  size_t filesize() {
-    struct stat stat;
-    fstat(fd, &stat);
-    return stat.st_size;
-  }
-  void init(int fd) {
-    this->fd = fd;
-    for (int i = 0; i < MAX_SEGMENTS; i++)
-      segments[i] = VSeg(NULL);
-    lock_metapage();
-    init_metapage(filesize() == 0);
-    unlock_metapage();
-    freelist = metapage->freelist;
-  }
-  void init() {
-    FILE *fp = tmpfile();
-    init(fileno(fp));
-    int channel[2];
-    pipe(channel);
-    metapage->process_info[0].pid = getpid();
-    metapage->process_info[0].pipe_fd = channel[1];
-    current_process = getpid();
-    signal_fd = channel[0];
-    fcntl(signal_fd, FD_CLOEXEC);
-  }
-  bool init(const char *path) {
-    int fd = open(path, O_RDWR | O_CREAT, 0600);
-    if (fd < 0)
-      return false;
-    init(fd);
-    lock_metapage();
-    // TODO: enter process in meta table
-    unlock_metapage();
-    return true;
-  }
   inline Block *block_ptr(vaddr_t vaddr) {
     if (vaddr == VADDR_NULL)
       return NULL;
     return (Block *) (segment(vaddr).base + segaddr(vaddr));
   }
-  void *mmap_segment(int seg) {
-    lock_metapage();
-    void *result = mmap(NULL, SEGMENT_SIZE, PROT_READ | PROT_WRITE,
-        MAP_SHARED, fd, METABLOCK_SIZE + seg * SEGMENT_SIZE);
-    if (result == MAP_FAILED)
-      perror("mmap");
-    unlock_metapage();
-    return NULL;
-  }
-  void ensure_is_mapped(vaddr_t vaddr) {
+  inline void ensure_is_mapped(vaddr_t vaddr) {
     int seg = vaddr >> LOG2_SEGMENT_SIZE;
     if (segments[seg].base != NULL)
       return;
     segments[seg] = mmap_segment(seg);
   }
-  void *to_ptr(vaddr_t vaddr) {
+  inline void *to_ptr(vaddr_t vaddr) {
     ensure_is_mapped(vaddr);
     return segment(vaddr).ptr(segaddr(vaddr));
   }
-  void map_segments(int lastseg) {
-    if (!metapage->valid_segment[lastseg]) {
-      ftruncate(fd, METABLOCK_SIZE + (lastseg + 1) * SEGMENT_SIZE);
-      while (metapage->segment_count <= lastseg) {
-        int seg = ++metapage->segment_count;
-        metapage->valid_segment[seg] = 1;
-        void *map_addr = mmap_segment(seg);
-        segments[seg] = VSeg(map_addr);
-        Block *top = block_ptr(seg * SEGMENT_SIZE);
-        top->next = freelist[LOG2_SEGMENT_SIZE];
-        top->prev = VADDR_NULL;
-        freelist[LOG2_SEGMENT_SIZE] = seg * SEGMENT_SIZE;
-      }
-    }
-  }
+  size_t filesize();
+  void init(int fd);
+  void init();
+  bool init(const char *path);
+  void *mmap_segment(int seg);
+  void map_segments(int lastseg);
 };
 
 static VMem &vmem = VMem::vmem_global;

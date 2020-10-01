@@ -4,7 +4,69 @@ namespace vspace { namespace internals {
 
 size_t config[4]
     = { METABLOCK_SIZE, MAX_PROCESS, SEGMENT_SIZE, MAX_SEGMENTS };
+
 VMem VMem::vmem_global;
+
+  size_t VMem::filesize() {
+    struct stat stat;
+    fstat(fd, &stat);
+    return stat.st_size;
+  }
+  void VMem::init(int fd) {
+    this->fd = fd;
+    for (int i = 0; i < MAX_SEGMENTS; i++)
+      segments[i] = VSeg(NULL);
+    lock_metapage();
+    init_metapage(filesize() == 0);
+    unlock_metapage();
+    freelist = metapage->freelist;
+  }
+  void VMem::init() {
+    FILE *fp = tmpfile();
+    init(fileno(fp));
+    int channel[2];
+    pipe(channel);
+    metapage->process_info[0].pid = getpid();
+    metapage->process_info[0].pipe_fd = channel[1];
+    current_process = getpid();
+    signal_fd = channel[0];
+    fcntl(signal_fd, FD_CLOEXEC);
+  }
+  bool VMem::init(const char *path) {
+    int fd = open(path, O_RDWR | O_CREAT, 0600);
+    if (fd < 0)
+      return false;
+    init(fd);
+    lock_metapage();
+    // TODO: enter process in meta table
+    unlock_metapage();
+    return true;
+  }
+  void *VMem::mmap_segment(int seg) {
+    lock_metapage();
+    void *result = mmap(NULL, SEGMENT_SIZE, PROT_READ | PROT_WRITE,
+        MAP_SHARED, fd, METABLOCK_SIZE + seg * SEGMENT_SIZE);
+    if (result == MAP_FAILED)
+      perror("mmap");
+    unlock_metapage();
+    return NULL;
+  }
+  void VMem::map_segments(int lastseg) {
+    if (!metapage->valid_segment[lastseg]) {
+      ftruncate(fd, METABLOCK_SIZE + (lastseg + 1) * SEGMENT_SIZE);
+      while (metapage->segment_count <= lastseg) {
+        int seg = ++metapage->segment_count;
+        metapage->valid_segment[seg] = 1;
+        void *map_addr = mmap_segment(seg);
+        segments[seg] = VSeg(map_addr);
+        Block *top = block_ptr(seg * SEGMENT_SIZE);
+        top->next = freelist[LOG2_SEGMENT_SIZE];
+        top->prev = VADDR_NULL;
+        freelist[LOG2_SEGMENT_SIZE] = seg * SEGMENT_SIZE;
+      }
+    }
+  }
+
 
 void vmem_free(vaddr_t vaddr) {
   VSeg seg = vmem.segment(vaddr);
