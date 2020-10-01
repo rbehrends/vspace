@@ -119,13 +119,14 @@ vaddr_t vmem_alloc(size_t size) {
     Block *block = vmem.block_ptr(blockaddr);
     vmem.freelist[flevel] = block->next;
     if (vmem.freelist[flevel] != VADDR_NULL)
-      vmem.block_ptr(vmem.freelist[flevel])->prev = SEGADDR_NULL;
+      vmem.block_ptr(vmem.freelist[flevel])->prev = VADDR_NULL;
     segaddr_t blockaddr2 = blockaddr + (1 << (flevel - 1));
     Block *block2 = vmem.block_ptr(blockaddr2);
-    block2->next = block->next;
+    flevel--;
+    block2->next = vmem.freelist[flevel];
     block2->prev = blockaddr;
     block->next = blockaddr2;
-    flevel--;
+    // block->prev == VADDR_NULL already.
     vmem.freelist[flevel] = blockaddr;
   }
   Block *block = vmem.block_ptr(vmem.freelist[level]);
