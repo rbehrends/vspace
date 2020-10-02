@@ -479,9 +479,9 @@ private:
     VRef<Node> result = _head;
     if (_head == _tail) {
       _head = _tail = vnull<Node>();
-      return;
+    } else {
+      _head = _head->next;
     }
-    _head = _head->next;
   }
   void add(VRef<Node> node) {
     node->next = vnull<Node>();

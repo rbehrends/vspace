@@ -21,20 +21,20 @@ int main() {
   mutex->lock();
   mutex->unlock();
   VRef<Semaphore> sem = vnew<Semaphore>(0);
-  VRef<Queue<int>> queue = vnew<Queue<int>>();
+  VRef<Queue<int> > queue = vnew<Queue<int> >();
   pid_t pid = fork_process();
-  if (pid == 0 ) {
-      printf("child process\n");
-      sleep(1);
-      sem->post();
-      queue->enqueue(vnew<int>(314));
+  if (pid == 0) {
+    printf("child process\n");
+    sleep(1);
+    sem->post();
+    queue->enqueue(vnew<int>(314));
   } else if (pid > 0) {
-      printf("parent process\n");
-      sem->wait();
-      printf("%d\n", *queue->dequeue());
-      waitpid(pid, NULL, 0);
+    printf("parent process\n");
+    sem->wait();
+    printf("%d\n", *queue->dequeue());
+    waitpid(pid, NULL, 0);
   } else {
-      printf("fork() failed");
+    printf("fork() failed");
   }
   return 0;
 }
