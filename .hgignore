@@ -1,3 +1,5 @@
 syntax: glob
-.sconsign.dblite
+.scons*
 *.o
+.vscode
+.gitignore

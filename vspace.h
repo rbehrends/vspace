@@ -17,19 +17,21 @@
 #undef HAVE_ATOMIC
 #endif
 
-// vspace is a C++ library designed to allow processes in a multi-process
-// environment to interoperate via mmapped shared memory. The library
-// provides facilities for shared memory allocation and deallocation,
-// shared mutexes, semaphores, queues, lists, and hash tables.
+// vspace is a C++ library designed to allow processes in a
+// multi-process environment to interoperate via mmapped shared memory.
+// The library provides facilities for shared memory allocation and
+// deallocation, shared mutexes, semaphores, queues, lists, and hash
+// tables.
 //
-// The underlying file is organized starting with a block containing meta
-// information such as free lists and process information necessary for
-// IPC, followed by one or more segments of mmapped memory. Each address
-// within the file is represented via its offset from the beginning of
-// the first segment.
+// The underlying file is organized starting with a block containing
+// meta information such as free lists and process information necessary
+// for IPC, followed by one or more segments of mmapped memory. Each
+// address within the file is represented via its offset from the
+// beginning of the first segment.
 //
-// These offsets are wrapped within the VRef<T> class, which works like a T*
-// pointer, but transparently maps file offsets to memory locations.
+// These offsets are wrapped within the VRef<T> class, which works like
+// a T* pointer, but transparently maps file offsets to memory
+// locations.
 
 namespace vspace {
 
@@ -93,13 +95,14 @@ struct ProcessChannel {
 };
 
 struct Block {
-  // the lowest bits of prev encode whether we are looking at
-  // an allocated or free block. For an allocared block, the
-  // lowest bits are 01. For a free block, they are 00 (for a
-  // null reference (== -1), they are 11.
-  // For allocated blocks, the higher bits encode the segment
-  // and the log2 of the block offset. This requires
-  // LOG2_MAX_SEGMENTS + log2(sizeof(vaddr_t) * 8) + 2 bits.
+  // the lowest bits of prev encode whether we are looking at an
+  // allocated or free block. For an allocared block, the lowest bits
+  // are 01. For a free block, they are 00 (for a null reference (==
+  // -1), they are 11.
+  //
+  // For allocated blocks, the higher bits encode the segment and the
+  // log2 of the block offset. This requires LOG2_MAX_SEGMENTS +
+  // log2(sizeof(vaddr_t) * 8) + 2 bits.
   vaddr_t prev;
   vaddr_t next;
   bool is_free() {
