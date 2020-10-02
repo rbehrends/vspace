@@ -21,8 +21,8 @@ void VMem::init(int fd) {
   for (int i = 0; i < MAX_PROCESS; i++) {
     int channel[2];
     pipe(channel);
-    processes[i].fd_read = channel[0];
-    processes[i].fd_write = channel[1];
+    channels[i].fd_read = channel[0];
+    channels[i].fd_write = channel[1];
   }
   lock_metapage();
   init_metapage(filesize() == 0);
@@ -34,9 +34,7 @@ void VMem::init() {
   FILE *fp = tmpfile();
   init(fileno(fp));
   current_process = 0;
-  signal_fd = processes[0].fd_read;
   metapage->process_info[0].pid = getpid();
-  fcntl(signal_fd, FD_CLOEXEC);
 }
 
 bool VMem::init(const char *path) {
@@ -209,14 +207,15 @@ void init_metapage(bool create) {
 
 void send_signal(int processno) {
   static char buf[1] = "";
-  // TODO: init processes[] on demand.
-  int fd = vmem.processes[processno].fd_write;
+  // TODO: init channels[] on demand.
+  int fd = vmem.channels[processno].fd_write;
   write(fd, buf, 1);
 }
 
 void wait_signal() {
   char buf[1];
-  read(vmem.signal_fd, buf, 1);
+  int fd = vmem.channels[vmem.current_process].fd_write;
+  read(fd, buf, 1);
 }
 
 } // namespace internals
@@ -233,7 +232,6 @@ pid_t fork_process() {
         // child process
         int parent = vmem.current_process;
         vmem.current_process = p;
-        vmem.signal_fd = vmem.processes[p].fd_read;
         vmem.metapage->process_info[p].pid = getpid();
         unlock_metapage();
         send_signal(parent);

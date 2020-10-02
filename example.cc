@@ -3,7 +3,6 @@
 
 int main() {
   using namespace vspace::internals;
-  using namespace vspace;
   vmem.init();
   const int n = 10;
   vaddr_t addr[n];
@@ -17,6 +16,7 @@ int main() {
     vaddr_t a = vmem_alloc(10);
     printf("%lu\n", a);
   }
+  using namespace vspace;
   VRef<Mutex> mutex = vnew<Mutex>();
   mutex->lock();
   mutex->unlock();

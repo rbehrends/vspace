@@ -65,7 +65,7 @@ void wait_signal();
 
 struct Block;
 struct MetaPage;
-struct Process;
+struct ProcessChannel;
 
 struct ProcessInfo {
   pid_t pid;
@@ -79,7 +79,16 @@ struct MetaPage {
   ProcessInfo process_info[MAX_PROCESS];
 };
 
-struct Process {
+// We use pipes/fifos to signal processes. For each process, fd_read is
+// where the process reads from and fd_write is where other processes
+// signal the reading process. Only single bytes are sent across each
+// channel. Because the effect of concurrent writes is undefined, bytes
+// must only be written by a single process at the time. This is usually
+// the case when the sending process knows that the receiving process is
+// waiting for a resource that the sending process currently holds. See
+// the Semaphore implementation for an example.
+
+struct ProcessChannel {
   int fd_read, fd_write;
 };
 
@@ -133,10 +142,9 @@ struct VMem {
   MetaPage *metapage;
   int fd;
   int current_process; // index into process table
-  int signal_fd; // fd where the current process receives control information
   vaddr_t *freelist; // reference to metapage information
   VSeg segments[MAX_SEGMENTS];
-  Process processes[MAX_PROCESS];
+  ProcessChannel channels[MAX_PROCESS];
   inline VSeg segment(vaddr_t vaddr) {
     return segments[vaddr >> LOG2_SEGMENT_SIZE];
   }
