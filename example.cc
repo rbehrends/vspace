@@ -36,6 +36,7 @@ int main() {
     sem->wait();
     VRef<VString> msg = queue->dequeue();
     printf("%d: %s\n", (int) msg->len(), msg->str());
+    msg.free();
   } else {
     printf("fork() failed");
   }

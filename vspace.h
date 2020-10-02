@@ -429,7 +429,7 @@ public:
     buffer[len] = '\0';
   }
   ~VString() {
-    internals::vmem_free(_buffer);
+    _buffer.free();
   }
   size_t len() {
     return _len;
