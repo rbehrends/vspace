@@ -494,8 +494,7 @@ private:
   }
 
 public:
-  Queue() : _sem(0), _lock() {
-  }
+  Queue() : _sem(0) {}
   void enqueue(VRef<T> item) {
     _lock.lock();
     VRef<Node> node = vnew<Node>();
