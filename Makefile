@@ -1,11 +1,12 @@
 CXXFLAGS=-g -std=c++11
-OBJ=example.o vspace.o
-EXE=example
+OBJ=vspace.o
+EXE=example example2
 all: $(EXE)
-$(EXE): $(OBJ)
-	$(CXX) -g -o $(EXE) $(OBJ)
+%: %.o vspace.o
+	$(CXX) -g -o $@ $+
 
 example.o: example.cc vspace.h
+example2.o: example2.cc vspace.h
 vspace.o: vspace.cc vspace.h
 
 clean:

@@ -16,32 +16,5 @@ int main() {
     vaddr_t a = vmem_alloc(10);
     printf("%lu\n", a);
   }
-  using namespace vspace;
-  VRef<Mutex> mutex = vnew<Mutex>();
-  mutex->lock();
-  mutex->unlock();
-  VRef<Semaphore> sem = vnew<Semaphore>(0);
-  VRef<Queue<VString> > queue = vnew<Queue<VString> >();
-  pid_t pid = fork_process();
-  if (pid == 0) {
-    printf("child process\n");
-    sleep(1);
-    sem->post();
-    VRef<VString> msg = vstring("Hello, world!");
-    queue->enqueue(msg);
-    exit(0);
-  } else if (pid > 0) {
-    printf("parent process\n");
-    sem->wait();
-    VRef<VString> msg = queue->dequeue();
-    printf("%d: %s\n", (int) msg->len(), msg->str());
-    waitpid(pid, NULL, 0);
-    msg.free();
-    queue.free();
-    sem.free();
-    mutex.free();
-  } else {
-    printf("fork() failed");
-  }
   return 0;
 }

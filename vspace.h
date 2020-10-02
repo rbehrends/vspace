@@ -178,7 +178,48 @@ struct VMem {
 
 static VMem &vmem = VMem::vmem_global;
 
-static inline int find_level(size_t size) {
+#ifdef HAVE_ATOMIC_H
+struct refcount_t {
+  std::atomic<ptrdiff_t> rc;
+  refcount_t(ptrdiff_t init) : rc(init) {
+  }
+  ptrdiff_t inc(vaddr_t vaddr) {
+    rc++;
+    return (ptrdiff_t) rc;
+  }
+  ptrdiff_t dec(vaddr_t vaddr) {
+    rc--;
+    return (ptrdiff_t) rc;
+  }
+}
+#else
+struct refcount_t {
+  ptrdiff_t rc;
+  static void lock(vaddr_t vaddr) {
+    lock_file(vmem.fd, METABLOCK_SIZE + vaddr);
+  }
+  static void unlock(vaddr_t vaddr) {
+    unlock_file(vmem.fd, METABLOCK_SIZE + vaddr);
+  }
+  refcount_t(ptrdiff_t init) : rc(init) {
+  }
+  ptrdiff_t inc(vaddr_t vaddr) {
+    lock(vaddr);
+    ptrdiff_t result = ++rc;
+    unlock(vaddr);
+    return result;
+  }
+  ptrdiff_t dec(vaddr_t vaddr) {
+    lock(vaddr);
+    ptrdiff_t result = --rc;
+    unlock(vaddr);
+    return result;
+  }
+};
+#endif
+
+static inline int
+find_level(size_t size) {
   int level = 0;
   while ((1 << (level + 8)) <= size)
     level += 8;
@@ -234,6 +275,13 @@ public:
 
 }; // namespace internals
 
+static inline void vmem_init() {
+  internals::vmem.init();
+}
+
+static inline void vmem_deinit() {
+}
+
 template <typename T>
 struct VRef {
 private:
@@ -272,12 +320,15 @@ public:
     vaddr = other.vaddr;
     return *this;
   }
-  T& operator[](size_t index) {
+  T &operator[](size_t index) {
     return as_ptr()[index];
   }
   template <typename U>
   VRef<U> cast() {
     return VRef<U>(vaddr);
+  }
+  static VRef<T> alloc(size_t n = 1) {
+    return VRef<T>(internals::vmem_alloc(n * sizeof(T)));
   }
   void free() {
     as_ptr()->~T(); // explicitly call destructor
@@ -286,32 +337,79 @@ public:
   }
 };
 
-#if 0
+template <typename T>
+VRef<T> vnull() {
+  return VRef<T>(internals::VADDR_NULL);
+}
+
+template <typename T>
+VRef<T> vnew() {
+  VRef<T> result = VRef<T>::alloc();
+  new (result.to_ptr()) T();
+  return result;
+}
+
+template <typename T>
+VRef<T> vnew_uninitialized() {
+  VRef<T> result = VRef<T>::alloc();
+  return result;
+}
+
+template <typename T>
+VRef<T> vnew_array(size_t n) {
+  VRef<T> result = VRef<T>::alloc(n);
+  T *ptr = result.as_ptr();
+  for (size_t i = 0; i < n; i++) {
+    new (ptr + i) T();
+  }
+  return result;
+}
+
+template <typename T>
+VRef<T> vnew_uninitialized_array(size_t n) {
+  VRef<T> result = VRef<T>::alloc(n);
+  return result;
+}
+
+template <typename T, typename Arg>
+VRef<T> vnew(Arg arg) {
+  VRef<T> result = VRef<T>::alloc();
+  new (result.to_ptr()) T(arg);
+  return result;
+}
+
+template <typename T, typename Arg1, typename Arg2>
+VRef<T> vnew(Arg1 arg1, Arg2 arg2) {
+  VRef<T> result = VRef<T>::alloc();
+  new (result.to_ptr()) T(arg1, arg2);
+  return result;
+}
+
+template <typename T, typename Arg1, typename Arg2, typename Arg3>
+VRef<T> vnew(Arg1 arg1, Arg2 arg2, Arg3 arg3) {
+  VRef<T> result = VRef<T>::alloc();
+  new (result.to_ptr()) T(arg1, arg2, arg3);
+  return result;
+}
+
 template <typename T>
 struct ZRef {
 private:
-  struct RefCount {
-    std::atomic<ptrdiff_t> rc;
-    T data;
-    static internals::vaddr_t alloc() {
-      return internals::vmem_alloc(sizeof(RefCount));
+  struct RefCounted {
+    internals::refcount_t rc;
+#if __cplusplus >= 201100
+    alignas(T)
+#endif
+    char data[sizeof(T)];
+    RefCounted() : rc(1) {
     }
   };
   internals::vaddr_t vaddr;
-  std::atomic<ptrdiff_t> &refcount() {
-    return ((RefCount *) (internals::vmem.to_ptr(vaddr)))->rc;
-  }
-  void retain() {
-    refcount()++;
-  }
-  void release() {
-    if (--refcount() == 0) {
-      as_ref().~T();
-      internals::vmem_free(vaddr);
-    }
+  internals::refcount_t &refcount() {
+    return ((RefCounted *) (internals::vmem.to_ptr(vaddr)))->rc;
   }
   void *to_ptr() {
-    return &(((RefCount *) (internals::vmem.to_ptr(vaddr)))->data);
+    return &(((RefCounted *) (internals::vmem.to_ptr(vaddr)))->data);
   }
 
 public:
@@ -347,65 +445,76 @@ public:
   ZRef<U> cast() {
     return ZRef<U>(vaddr);
   }
+  void retain() {
+    refcount().inc(vaddr);
+  }
+  void release() {
+    if (refcount().dec(vaddr) == 0) {
+      as_ref().~T();
+      internals::vmem_free(vaddr);
+    }
+  }
   void free() {
     as_ptr()->~T(); // explicitly call destructor
     internals::vmem_free(vaddr);
     vaddr = internals::VADDR_NULL;
   }
+  static internals::vaddr_t alloc() {
+    return internals::vmem_alloc(sizeof(RefCounted));
+  }
 };
-#endif
 
 template <typename T>
-VRef<T> vnull() {
-  return VRef<T>(internals::VADDR_NULL);
+ZRef<T> znull() {
+  return ZRef<T>(internals::VADDR_NULL);
 }
 
 template <typename T>
-VRef<T> vnew() {
-  VRef<T> result = VRef<T>(internals::vmem_alloc(sizeof(T)));
+ZRef<T> znew() {
+  ZRef<T> result = ZRef<T>::alloc();
   new (result.to_ptr()) T();
   return result;
 }
 
 template <typename T>
-VRef<T> vnew_uninitialized() {
-  VRef<T> result = VRef<T>(internals::vmem_alloc(sizeof(T)));
+ZRef<T> znew_uninitialized() {
+  ZRef<T> result = ZRef<T>::alloc();
   return result;
 }
 
 template <typename T>
-VRef<T> vnew_array(size_t n) {
-  VRef<T> result = VRef<T>(internals::vmem_alloc(n * sizeof(T)));
+ZRef<T> znew_array(size_t n) {
+  ZRef<T> result = ZRef<T>::alloc();
   T *ptr = result.as_ptr();
   for (size_t i = 0; i < n; i++) {
-    new(ptr+i) T();
+    new (ptr + i) T();
   }
   return result;
 }
 
 template <typename T>
-VRef<T> vnew_uninitialized_array(size_t n) {
-  VRef<T> result = VRef<T>(internals::vmem_alloc(n * sizeof(T)));
+ZRef<T> znew_uninitialized_array(size_t n) {
+  ZRef<T> result = ZRef<T>::alloc();
   return result;
 }
 
 template <typename T, typename Arg>
-VRef<T> vnew(Arg arg) {
-  VRef<T> result = VRef<T>(internals::vmem_alloc(sizeof(T)));
+ZRef<T> znew(Arg arg) {
+  ZRef<T> result = ZRef<T>::alloc();
   new (result.to_ptr()) T(arg);
   return result;
 }
 
 template <typename T, typename Arg1, typename Arg2>
-VRef<T> vnew(Arg1 arg1, Arg2 arg2) {
-  VRef<T> result = VRef<T>(internals::vmem_alloc(sizeof(T)));
+ZRef<T> znew(Arg1 arg1, Arg2 arg2) {
+  ZRef<T> result = ZRef<T>::alloc();
   new (result.to_ptr()) T(arg1, arg2);
   return result;
 }
 
 template <typename T, typename Arg1, typename Arg2, typename Arg3>
-VRef<T> vnew(Arg1 arg1, Arg2 arg2, Arg3 arg3) {
-  VRef<T> result = VRef<T>(internals::vmem_alloc(sizeof(T)));
+ZRef<T> znew(Arg1 arg1, Arg2 arg2, Arg3 arg3) {
+  ZRef<T> result = ZRef<T>::alloc();
   new (result.to_ptr()) T(arg1, arg2, arg3);
   return result;
 }
@@ -418,12 +527,12 @@ private:
 public:
   VString(const char *s) {
     _len = strlen(s);
-    _buffer = vnew_uninitialized_array<char>(_len+1);
+    _buffer = vnew_uninitialized_array<char>(_len + 1);
     strcpy(_buffer.as_ptr(), s);
   }
   VString(const char *s, size_t len) {
     _len = len;
-    _buffer = vnew_uninitialized_array<char>(len+1);
+    _buffer = vnew_uninitialized_array<char>(len + 1);
     char *buffer = _buffer.as_ptr();
     memcpy(buffer, s, len);
     buffer[len] = '\0';
@@ -523,7 +632,8 @@ private:
   }
 
 public:
-  Queue() : _sem(0) {}
+  Queue() : _sem(0) {
+  }
   void enqueue(VRef<T> item) {
     _lock.lock();
     VRef<Node> node = vnew<Node>();
@@ -541,15 +651,6 @@ public:
     node.free();
     _lock.unlock();
     return result;
-  }
-  void dequeue(VRef<T> &result) {
-    _sem.wait();
-    _lock.lock();
-    VRef<Node> node = _head;
-    remove(_head);
-    result = node->data;
-    node.free();
-    _lock.unlock();
   }
 };
 
