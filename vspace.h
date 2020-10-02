@@ -267,6 +267,9 @@ public:
     vaddr = other.vaddr;
     return *this;
   }
+  T& operator[](size_t index) {
+    return as_ptr()[index];
+  }
   template <typename U>
   VRef<U> cast() {
     return VRef<U>(vaddr);
@@ -365,6 +368,22 @@ VRef<T> vnew_uninitialized() {
   return result;
 }
 
+template <typename T>
+VRef<T> vnew_array(size_t n) {
+  VRef<T> result = VRef<T>(internals::vmem_alloc(n * sizeof(T)));
+  T *ptr = result.as_ptr();
+  for (size_t i = 0; i < n; i++) {
+    new(ptr+i) T();
+  }
+  return result;
+}
+
+template <typename T>
+VRef<T> vnew_uninitialized_array(size_t n) {
+  VRef<T> result = VRef<T>(internals::vmem_alloc(n * sizeof(T)));
+  return result;
+}
+
 template <typename T, typename Arg>
 VRef<T> vnew(Arg arg) {
   VRef<T> result = VRef<T>(internals::vmem_alloc(sizeof(T)));
@@ -388,19 +407,21 @@ VRef<T> vnew(Arg1 arg1, Arg2 arg2, Arg3 arg3) {
 
 class VString {
 private:
-  internals::vaddr_t _buffer;
+  VRef<char> _buffer;
   size_t _len;
 
 public:
   VString(const char *s) {
     _len = strlen(s);
-    _buffer = internals::vmem_alloc(_len + 1);
-    strcpy((char *) internals::vmem.to_ptr(_buffer), s);
+    _buffer = vnew_uninitialized_array<char>(_len+1);
+    strcpy(_buffer.as_ptr(), s);
   }
   VString(const char *s, size_t len) {
     _len = len;
-    _buffer = internals::vmem_alloc(len + 1);
-    strcpy((char *) internals::vmem.to_ptr(_buffer), s);
+    _buffer = vnew_uninitialized_array<char>(len+1);
+    char *buffer = _buffer.as_ptr();
+    memcpy(buffer, s, len);
+    buffer[len] = '\0';
   }
   ~VString() {
     internals::vmem_free(_buffer);
