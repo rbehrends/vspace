@@ -13,7 +13,6 @@
 #define HAVE_ATOMIC
 #include <atomic>
 #else
-#error __cplusplus
 #undef HAVE_ATOMIC
 #endif
 
