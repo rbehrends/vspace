@@ -18,6 +18,12 @@ void VMem::init(int fd) {
   this->fd = fd;
   for (int i = 0; i < MAX_SEGMENTS; i++)
     segments[i] = VSeg(NULL);
+  for (int i = 0; i < MAX_PROCESS; i++) {
+    int channel[2];
+    pipe(channel);
+    processes[i].fd_read = channel[0];
+    processes[i].fd_write = channel[1];
+  }
   lock_metapage();
   init_metapage(filesize() == 0);
   unlock_metapage();
@@ -27,13 +33,9 @@ void VMem::init(int fd) {
 void VMem::init() {
   FILE *fp = tmpfile();
   init(fileno(fp));
-  int channel[2];
-  pipe(channel);
-  metapage->process_info[0].pid = getpid();
-  metapage->process_info[0].pipe_fd = channel[1];
-  processes[0].fd = channel[1];
   current_process = 0;
-  signal_fd = channel[0];
+  signal_fd = processes[0].fd_read;
+  metapage->process_info[0].pid = getpid();
   fcntl(signal_fd, FD_CLOEXEC);
 }
 
@@ -208,7 +210,8 @@ void init_metapage(bool create) {
 void send_signal(int processno) {
   static char buf[1] = "";
   // TODO: init processes[] on demand.
-  write(vmem.processes[processno].fd, buf, 1);
+  int fd = vmem.processes[processno].fd_write;
+  write(fd, buf, 1);
 }
 
 void wait_signal() {
@@ -221,26 +224,21 @@ void wait_signal() {
 pid_t fork_process() {
   using namespace internals;
   lock_metapage();
-  for (int i = 0; i < MAX_PROCESS; i++) {
-    if (vmem.metapage->process_info[i].pid == 0) {
-      int channel[2];
-      pipe(channel);
-      fcntl(channel[1], FD_CLOEXEC);
-      vmem.metapage->process_info[i].pipe_fd = channel[1];
+  for (int p = 0; p < MAX_PROCESS; p++) {
+    if (vmem.metapage->process_info[p].pid == 0) {
       pid_t pid = fork();
       if (pid < 0) {
         // error
       } else if (pid == 0) {
         // child process
         int parent = vmem.current_process;
-        vmem.current_process = i;
-        vmem.metapage->process_info[i].pid = getpid();
-        vmem.signal_fd = channel[0];
+        vmem.current_process = p;
+        vmem.signal_fd = vmem.processes[p].fd_read;
+        vmem.metapage->process_info[p].pid = getpid();
         unlock_metapage();
         send_signal(parent);
       } else {
         // parent process
-        close(channel[0]);
         wait_signal();
         // child has unlocked metapage, so we don't need to.
       }

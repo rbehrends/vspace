@@ -68,11 +68,8 @@ struct MetaPage;
 struct Process;
 
 struct ProcessInfo {
-  // pipe_fd < 0 implies that fifo_path is valid and contains a
-  // zero-terminated path for a POSIX fifo.
   pid_t pid;
-  int pipe_fd;
-  char fifo_path[256 - sizeof(int) - sizeof(pid_t)];
+  char fifo_path[256 - sizeof(pid_t)];
 };
 
 struct MetaPage {
@@ -83,7 +80,7 @@ struct MetaPage {
 };
 
 struct Process {
-  int fd;
+  int fd_read, fd_write;
 };
 
 struct Block {
