@@ -430,7 +430,7 @@ public:
     return _len;
   }
   const char *str() {
-    return (const char *) internals::vmem.to_ptr(_buffer);
+    return _buffer.as_ptr();
   }
 };
 
