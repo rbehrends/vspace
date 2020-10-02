@@ -1,14 +1,21 @@
 CXXFLAGS=-g -std=c++11
-OBJ=example.o vspace.o
-EXE=example
-all: $(EXE)
-$(EXE): $(OBJ)
-	$(CXX) -g -o $(EXE) $(OBJ)
+BLD=build
+LIB=$(BLD)/vspace.o
+HEADERS=vspace.h
+SRC=$(wildcard example*.cc)
+OBJ=$(patsubst %.cc,$(BLD)/%.o,$(SRC))
+EXE=$(patsubst %.cc,%,$(SRC))
 
-example.o: example.cc vspace.h
-vspace.o: vspace.cc vspace.h
+$(shell mkdir -p $(BLD))
+
+all: $(EXE)
+
+$(EXE): %: build/%.o $(LIB)
+	$(CXX) -g -o $@ $+
+$(OBJ) $(LIB): $(BLD)/%.o: %.cc $(HEADERS)
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 clean:
-	rm -f $(EXE) $(OBJ)
+	rm -rf $(EXE) $(BLD)
 
 .PHONY: clean
