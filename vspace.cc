@@ -214,7 +214,7 @@ void send_signal(int processno) {
 
 void wait_signal() {
   char buf[1];
-  int fd = vmem.channels[vmem.current_process].fd_write;
+  int fd = vmem.channels[vmem.current_process].fd_read;
   read(fd, buf, 1);
 }
 

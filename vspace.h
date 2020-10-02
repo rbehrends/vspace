@@ -475,8 +475,9 @@ public:
         _head = 0;
     }
     _lock.unlock();
-    if (wakeup >= 0)
+    if (wakeup >= 0) {
       internals::send_signal(wakeup);
+    }
   }
   void wait() {
     _lock.lock();

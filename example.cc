@@ -32,11 +32,14 @@ int main() {
     exit(0);
   } else if (pid > 0) {
     printf("parent process\n");
-    waitpid(pid, NULL, 0);
     sem->wait();
     VRef<VString> msg = queue->dequeue();
     printf("%d: %s\n", (int) msg->len(), msg->str());
+    waitpid(pid, NULL, 0);
     msg.free();
+    queue.free();
+    sem.free();
+    mutex.free();
   } else {
     printf("fork() failed");
   }
