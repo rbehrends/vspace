@@ -278,6 +278,7 @@ public:
   }
 };
 
+#if 0
 template <typename T>
 struct ZRef {
 private:
@@ -302,7 +303,7 @@ private:
     }
   }
   void *to_ptr() {
-    return &((RefCount *) (internals::vmem.to_ptr(vaddr))->data);
+    return &(((RefCount *) (internals::vmem.to_ptr(vaddr)))->data);
   }
 
 public:
@@ -340,10 +341,11 @@ public:
   }
   void free() {
     as_ptr()->~T(); // explicitly call destructor
-    vmem_free(vaddr);
+    internals::vmem_free(vaddr);
     vaddr = internals::VADDR_NULL;
   }
 };
+#endif
 
 template <typename T>
 VRef<T> vnull() {
