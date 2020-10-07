@@ -150,6 +150,12 @@ struct VMem {
   inline VSeg segment(vaddr_t vaddr) {
     return segments[vaddr >> LOG2_SEGMENT_SIZE];
   }
+  inline size_t segment_no(vaddr_t vaddr) {
+    return vaddr >> LOG2_SEGMENT_SIZE;
+  }
+  inline vaddr_t vaddr(size_t segno, segaddr_t addr) {
+    return (segno << LOG2_SEGMENT_SIZE) | addr;
+  }
   inline segaddr_t segaddr(vaddr_t vaddr) {
     if (vaddr == VADDR_NULL)
       return SEGADDR_NULL;
@@ -652,7 +658,6 @@ public:
     _sem.wait();
     _lock.lock();
     VRef<Node> node = _head;
-    printf("V %ld\n", _sem.value());
     remove();
     VRef<T> result = node->data;
     node.free();
