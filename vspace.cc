@@ -74,17 +74,19 @@ static void lock_allocator() {
 }
 
 static void unlock_allocator() {
-  lock_file(vmem.fd, offsetof(MetaPage, freelist));
+  unlock_file(vmem.fd, offsetof(MetaPage, freelist));
 }
 
 void vmem_free(vaddr_t vaddr) {
   lock_allocator();
   vaddr -= sizeof(Block);
   vmem.ensure_is_mapped(vaddr);
+  size_t segno = vmem.segment_no(vaddr);
   VSeg seg = vmem.segment(vaddr);
   segaddr_t addr = vmem.segaddr(vaddr);
   int level = seg.block_ptr(addr)->level();
   segaddr_t buddy = find_buddy(addr, level);
+  assert(!seg.is_free(addr));
   bool freed = false;
   while (level < LOG2_SEGMENT_SIZE && seg.is_free(buddy)) {
     // buddy is free.
@@ -97,10 +99,14 @@ void vmem_free(vaddr_t vaddr) {
       // inner node
       Block *prev = vmem.block_ptr(block->prev);
       Block *next = vmem.block_ptr(block->next);
-      if (prev)
+      if (prev) {
+        assert(prev->next == vmem.vaddr(segno, addr));
         prev->next = block->next;
-      if (next)
+      }
+      if (next) {
+        assert(next->prev == vmem.vaddr(segno, addr));
         next->prev = block->prev;
+      }
     }
     level++;
     // insert joined block + buddy one level up
@@ -110,7 +116,7 @@ void vmem_free(vaddr_t vaddr) {
     block = seg.block_ptr(addr);
     block->prev = VADDR_NULL;
     block->next = vmem.freelist[level];
-    vmem.freelist[level] = addr;
+    vmem.freelist[level] = vmem.vaddr(segno, addr);
     freed = true;
   }
   // Has the block not yet been freed as part of being
@@ -119,7 +125,7 @@ void vmem_free(vaddr_t vaddr) {
     Block *block = seg.block_ptr(addr);
     block->prev = VADDR_NULL;
     block->next = vmem.freelist[level];
-    vmem.freelist[level] = addr;
+    vmem.freelist[level] = vmem.vaddr(segno, addr);
   }
   unlock_allocator();
 }
@@ -138,11 +144,12 @@ vaddr_t vmem_alloc(size_t size) {
   while (flevel > level) {
     // get and split a block
     vaddr_t blockaddr = vmem.freelist[flevel];
+    assert((blockaddr & ((1 << flevel) - 1)) == 0);
     Block *block = vmem.block_ptr(blockaddr);
     vmem.freelist[flevel] = block->next;
     if (vmem.freelist[flevel] != VADDR_NULL)
       vmem.block_ptr(vmem.freelist[flevel])->prev = VADDR_NULL;
-    segaddr_t blockaddr2 = blockaddr + (1 << (flevel - 1));
+    vaddr_t blockaddr2 = blockaddr + (1 << (flevel - 1));
     Block *block2 = vmem.block_ptr(blockaddr2);
     flevel--;
     block2->next = vmem.freelist[flevel];
@@ -151,10 +158,12 @@ vaddr_t vmem_alloc(size_t size) {
     // block->prev == VADDR_NULL already.
     vmem.freelist[flevel] = blockaddr;
   }
+  assert(vmem.freelist[level] != VADDR_NULL);
   Block *block = vmem.block_ptr(vmem.freelist[level]);
   vaddr_t vaddr = vmem.freelist[level];
   vaddr_t result = vaddr + sizeof(Block);
   vmem.freelist[level] = block->next;
+  block->prev = VADDR_NULL;
   block->mark_as_allocated(vaddr, level);
   unlock_allocator();
   return result;
@@ -172,13 +181,13 @@ void init_flock_struct(
 void lock_file(int fd, size_t offset, size_t len) {
   struct flock lock_info;
   init_flock_struct(lock_info, offset, len, true);
-  fcntl(fd, F_SETLK, &lock_info);
+  fcntl(fd, F_SETLKW, &lock_info);
 }
 
 void unlock_file(int fd, size_t offset, size_t len) {
   struct flock lock_info;
   init_flock_struct(lock_info, offset, len, false);
-  fcntl(fd, F_SETLK, &lock_info);
+  fcntl(fd, F_SETLKW, &lock_info);
 }
 
 void lock_metapage() {
@@ -228,15 +237,18 @@ pid_t fork_process() {
       pid_t pid = fork();
       if (pid < 0) {
         // error
+        return -1;
       } else if (pid == 0) {
         // child process
         int parent = vmem.current_process;
         vmem.current_process = p;
+        lock_metapage();
         vmem.metapage->process_info[p].pid = getpid();
         unlock_metapage();
         send_signal(parent);
       } else {
         // parent process
+        unlock_metapage();
         wait_signal();
         // child has unlocked metapage, so we don't need to.
       }

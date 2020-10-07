@@ -150,6 +150,12 @@ struct VMem {
   inline VSeg segment(vaddr_t vaddr) {
     return segments[vaddr >> LOG2_SEGMENT_SIZE];
   }
+  inline size_t segment_no(vaddr_t vaddr) {
+    return vaddr >> LOG2_SEGMENT_SIZE;
+  }
+  inline vaddr_t vaddr(size_t segno, segaddr_t addr) {
+    return (segno << LOG2_SEGMENT_SIZE) | addr;
+  }
   inline segaddr_t segaddr(vaddr_t vaddr) {
     if (vaddr == VADDR_NULL)
       return SEGADDR_NULL;
@@ -270,6 +276,7 @@ public:
   void unlock() {
     if (--_locklevel == 0) {
       assert(_owner == vmem.current_process);
+      _owner = -1;
       unlock_file(vmem.fd, METABLOCK_SIZE + _lock);
     }
   }
@@ -603,6 +610,9 @@ public:
     _lock.unlock();
     internals::wait_signal();
   }
+  size_t value() {
+    return _value;
+  }
 };
 
 template <typename T>
@@ -617,7 +627,7 @@ private:
   VRef<Node> _head, _tail;
   void remove() {
     VRef<Node> result = _head;
-    if (_head == _tail) {
+    if (_head->next.is_null()) {
       _head = _tail = vnull<Node>();
     } else {
       _head = _head->next;
@@ -634,7 +644,7 @@ private:
   }
 
 public:
-  Queue() : _sem(0) {
+  Queue() : _sem(0), _head(), _tail(), _lock() {
   }
   void enqueue(VRef<T> item) {
     _lock.lock();
