@@ -270,6 +270,7 @@ public:
   void unlock() {
     if (--_locklevel == 0) {
       assert(_owner == vmem.current_process);
+      _owner = -1;
       unlock_file(vmem.fd, METABLOCK_SIZE + _lock);
     }
   }
@@ -603,6 +604,9 @@ public:
     _lock.unlock();
     internals::wait_signal();
   }
+  size_t value() {
+    return _value;
+  }
 };
 
 template <typename T>
@@ -617,7 +621,7 @@ private:
   VRef<Node> _head, _tail;
   void remove() {
     VRef<Node> result = _head;
-    if (_head == _tail) {
+    if (_head->next.is_null()) {
       _head = _tail = vnull<Node>();
     } else {
       _head = _head->next;
@@ -634,7 +638,7 @@ private:
   }
 
 public:
-  Queue() : _sem(0) {
+  Queue() : _sem(0), _head(), _tail(), _lock() {
   }
   void enqueue(VRef<T> item) {
     _lock.lock();
@@ -648,6 +652,7 @@ public:
     _sem.wait();
     _lock.lock();
     VRef<Node> node = _head;
+    printf("V %ld\n", _sem.value());
     remove();
     VRef<T> result = node->data;
     node.free();

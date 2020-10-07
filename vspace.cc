@@ -74,7 +74,7 @@ static void lock_allocator() {
 }
 
 static void unlock_allocator() {
-  lock_file(vmem.fd, offsetof(MetaPage, freelist));
+  unlock_file(vmem.fd, offsetof(MetaPage, freelist));
 }
 
 void vmem_free(vaddr_t vaddr) {
@@ -172,13 +172,13 @@ void init_flock_struct(
 void lock_file(int fd, size_t offset, size_t len) {
   struct flock lock_info;
   init_flock_struct(lock_info, offset, len, true);
-  fcntl(fd, F_SETLK, &lock_info);
+  fcntl(fd, F_SETLKW, &lock_info);
 }
 
 void unlock_file(int fd, size_t offset, size_t len) {
   struct flock lock_info;
   init_flock_struct(lock_info, offset, len, false);
-  fcntl(fd, F_SETLK, &lock_info);
+  fcntl(fd, F_SETLKW, &lock_info);
 }
 
 void lock_metapage() {
@@ -228,15 +228,18 @@ pid_t fork_process() {
       pid_t pid = fork();
       if (pid < 0) {
         // error
+        return -1;
       } else if (pid == 0) {
         // child process
         int parent = vmem.current_process;
         vmem.current_process = p;
+        lock_metapage();
         vmem.metapage->process_info[p].pid = getpid();
         unlock_metapage();
         send_signal(parent);
       } else {
         // parent process
+        unlock_metapage();
         wait_signal();
         // child has unlocked metapage, so we don't need to.
       }
