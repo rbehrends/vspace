@@ -37,6 +37,7 @@ namespace vspace {
 namespace internals {
 
 typedef size_t segaddr_t;
+
 typedef size_t vaddr_t;
 
 const segaddr_t SEGADDR_NULL = ~(segaddr_t) 0;
@@ -100,15 +101,21 @@ struct Block {
   // -1), they are 11.
   //
   // For allocated blocks, the higher bits encode the segment and the
-  // log2 of the block offset. This requires LOG2_MAX_SEGMENTS +
+  // log2 of the block size (level). This requires LOG2_MAX_SEGMENTS +
   // log2(sizeof(vaddr_t) * 8) + 2 bits.
+  //
+  // For free blocks, the level is stored in the data field.
   vaddr_t prev;
   vaddr_t next;
+  size_t data[1];
   bool is_free() {
     return (prev & 3) != 1;
   }
   int level() {
-    return (int) (prev >> (LOG2_MAX_SEGMENTS + 2));
+    if (is_free())
+      return (int) data[0];
+    else
+      return (int) (prev >> (LOG2_MAX_SEGMENTS + 2));
   }
   void mark_as_allocated(vaddr_t vaddr, int level) {
     vaddr_t bits = level;
@@ -118,6 +125,9 @@ struct Block {
     bits |= 1;
     prev = bits;
     next = 0;
+  }
+  void mark_as_free(int level) {
+    data[0] = level;
   }
 };
 
@@ -185,6 +195,10 @@ struct VMem {
 };
 
 static VMem &vmem = VMem::vmem_global;
+
+inline Block *block_ptr(vaddr_t vaddr) {
+  return vmem.block_ptr(vaddr);
+}
 
 #ifdef HAVE_ATOMIC_H
 struct refcount_t {

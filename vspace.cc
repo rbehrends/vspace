@@ -77,62 +77,84 @@ static void unlock_allocator() {
   unlock_file(vmem.fd, offsetof(MetaPage, freelist));
 }
 
+static void print_freelists() {
+  for (int i = 0; i <= LOG2_SEGMENT_SIZE; i++) {
+    vaddr_t vaddr = vmem.freelist[i];
+    if (vaddr != VADDR_NULL) {
+      printf("%2d: %ld", i, vaddr);
+      vaddr_t prev = block_ptr(vaddr)->prev;
+      if (prev != VADDR_NULL) {
+        printf("(%ld)", prev);
+      }
+      assert(block_ptr(vaddr)->prev == VADDR_NULL);
+      for (;;) {
+        vaddr_t last_vaddr = vaddr;
+        Block *block = block_ptr(vaddr);
+        vaddr = block->next;
+        if (vaddr == VADDR_NULL) break;
+        printf(" -> %ld", vaddr);
+        vaddr_t prev = block_ptr(vaddr)->prev;
+        if (prev != last_vaddr) {
+          printf("(%ld)", prev);
+        }
+      }
+      printf("\n");
+    }
+  }
+  fflush(stdout);
+}
+
 void vmem_free(vaddr_t vaddr) {
   lock_allocator();
-  vaddr -= sizeof(Block);
+  vaddr -= offsetof(Block, data);
   vmem.ensure_is_mapped(vaddr);
   size_t segno = vmem.segment_no(vaddr);
   VSeg seg = vmem.segment(vaddr);
   segaddr_t addr = vmem.segaddr(vaddr);
   int level = seg.block_ptr(addr)->level();
-  segaddr_t buddy = find_buddy(addr, level);
   assert(!seg.is_free(addr));
-  bool freed = false;
-  while (level < LOG2_SEGMENT_SIZE && seg.is_free(buddy)) {
-    // buddy is free.
-    // remove buddy from freelist
+  while (level < LOG2_SEGMENT_SIZE) {
+    segaddr_t buddy = find_buddy(addr, level);
     Block *block = seg.block_ptr(buddy);
-    if (block->prev == VADDR_NULL) {
-      // head of free list
-      vmem.freelist[level] = block->next;
+    // is buddy free and at the same level?
+    if (!block->is_free() || block->level() != level)
+      break;
+    // remove buddy from freelist.
+    Block *prev = vmem.block_ptr(block->prev);
+    Block *next = vmem.block_ptr(block->next);
+    block->data[0] = level;
+    if (prev) {
+      assert(prev->next == vmem.vaddr(segno, buddy));
+      prev->next = block->next;
     } else {
-      // inner node
-      Block *prev = vmem.block_ptr(block->prev);
-      Block *next = vmem.block_ptr(block->next);
-      if (prev) {
-        assert(prev->next == vmem.vaddr(segno, addr));
-        prev->next = block->next;
-      }
-      if (next) {
-        assert(next->prev == vmem.vaddr(segno, addr));
-        next->prev = block->prev;
-      }
+      // head of freelist.
+      assert(vmem.freelist[level] == buddy);
+      vmem.freelist[level] = block->next;
     }
+    if (next) {
+      assert(next->prev == vmem.vaddr(segno, buddy));
+      next->prev = block->prev;
+    }
+    // coalesce block with buddy
     level++;
-    // insert joined block + buddy one level up
     if (buddy < addr)
       addr = buddy;
-    buddy = find_buddy(addr, level);
-    block = seg.block_ptr(addr);
-    block->prev = VADDR_NULL;
-    block->next = vmem.freelist[level];
-    vmem.freelist[level] = vmem.vaddr(segno, addr);
-    freed = true;
   }
-  // Has the block not yet been freed as part of being
-  // merged? If not, free it now.
-  if (!freed) {
-    Block *block = seg.block_ptr(addr);
-    block->prev = VADDR_NULL;
-    block->next = vmem.freelist[level];
-    vmem.freelist[level] = vmem.vaddr(segno, addr);
-  }
+  // Add coalesced block to free list
+  Block *block = seg.block_ptr(addr);
+  block->prev = VADDR_NULL;
+  block->next = vmem.freelist[level];
+  block->mark_as_free(level);
+  vaddr_t blockaddr = vmem.vaddr(segno, addr);
+  if (block->next != VADDR_NULL)
+    vmem.block_ptr(block->next)->prev = blockaddr;
+  vmem.freelist[level] = blockaddr;
   unlock_allocator();
 }
 
 vaddr_t vmem_alloc(size_t size) {
   lock_allocator();
-  size_t alloc_size = size + sizeof(Block);
+  size_t alloc_size = size + offsetof(Block, data);
   int level = find_level(alloc_size);
   int flevel = level;
   while (flevel < LOG2_SEGMENT_SIZE && vmem.freelist[flevel] == VADDR_NULL)
@@ -155,15 +177,17 @@ vaddr_t vmem_alloc(size_t size) {
     block2->next = vmem.freelist[flevel];
     block2->prev = blockaddr;
     block->next = blockaddr2;
+    block->prev = VADDR_NULL;
     // block->prev == VADDR_NULL already.
     vmem.freelist[flevel] = blockaddr;
   }
   assert(vmem.freelist[level] != VADDR_NULL);
   Block *block = vmem.block_ptr(vmem.freelist[level]);
   vaddr_t vaddr = vmem.freelist[level];
-  vaddr_t result = vaddr + sizeof(Block);
+  vaddr_t result = vaddr + offsetof(Block, data);
   vmem.freelist[level] = block->next;
-  block->prev = VADDR_NULL;
+  if (block->next != VADDR_NULL)
+    vmem.block_ptr(block->next)->prev = VADDR_NULL;
   block->mark_as_allocated(vaddr, level);
   unlock_allocator();
   return result;
