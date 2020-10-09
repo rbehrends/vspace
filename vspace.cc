@@ -346,4 +346,106 @@ pid_t fork_process() {
   return -1;
 }
 
+void Semaphore::post() {
+  int wakeup = -1;
+  _lock.lock();
+  if (_head == _tail) {
+    _value++;
+  } else {
+    // don't increment value, as we'll pass that on to the next process.
+    wakeup = _waiting[_head];
+    next(_head);
+  }
+  _lock.unlock();
+  if (wakeup >= 0) {
+    internals::send_signal(wakeup);
+  }
+}
+
+bool Semaphore::try_wait() {
+  bool result = false;
+  _lock.lock();
+  if (_value > 0) {
+    _value--;
+    result = true;
+  }
+  _lock.unlock();
+  return result;
+}
+
+void Semaphore::wait() {
+  _lock.lock();
+  if (_value > 0) {
+    _value--;
+    _lock.unlock();
+    return;
+  }
+  _waiting[_tail] = internals::vmem.current_process;
+  _signals[_tail] = 0;
+  next(_tail);
+  _lock.unlock();
+  internals::wait_signal();
+}
+
+bool Semaphore::start_wait(internals::ipc_signal_t sig) {
+  _lock.lock();
+  if (_value > 0) {
+    if (internals::send_signal(internals::vmem.current_process, sig))
+      _value--;
+    _lock.unlock();
+    return false;
+  }
+  _waiting[_tail] = internals::vmem.current_process;
+  _signals[_tail] = sig;
+  next(_tail);
+  _lock.unlock();
+  return true;
+}
+
+void Semaphore::stop_wait() {
+  _lock.lock();
+  for (int i = _head; i != _tail; next(i)) {
+    if (_waiting[i] == internals::vmem.current_process) {
+      int last = i;
+      next(i);
+      while (i != _tail) {
+        _waiting[last] = _waiting[i];
+        _signals[last] = _signals[i];
+        last = i;
+        next(i);
+      }
+      _tail = last;
+      break;
+    }
+  }
+  _lock.unlock();
+}
+
+void EventSet::add(Event *event) {
+  if (_count == _cap) {
+    int newcap = _cap * 3 / 2 + 1;
+    Event **events = new Event *[newcap];
+    memcpy(events, _events, sizeof(Event *) * _count);
+    if (_events == _default_events)
+      delete _events;
+    _events = events;
+  }
+  _events[_count++] = event;
+}
+
+int EventSet::wait() {
+  size_t n;
+  for (n = 0; n < _count; n++) {
+    if (!_events[n]->start_listen((int) n)) {
+      break;
+    }
+  }
+  internals::ipc_signal_t result = internals::check_signal();
+  for (size_t i = 0; i < n; i++) {
+    _events[i]->stop_listen();
+  }
+  internals::accept_signals();
+  return (int) result;
+}
+
 } // namespace vspace

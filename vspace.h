@@ -617,79 +617,14 @@ public:
   Semaphore(size_t value = 0) :
       _owner(0), _head(0), _tail(0), _value(value), _lock() {
   }
-  void post() {
-    int wakeup = -1;
-    _lock.lock();
-    if (_head == _tail) {
-      _value++;
-    } else {
-      // don't increment value, as we'll pass that on to the next process.
-      wakeup = _waiting[_head];
-      next(_head);
-    }
-    _lock.unlock();
-    if (wakeup >= 0) {
-      internals::send_signal(wakeup);
-    }
-  }
-  bool try_wait() {
-    bool result = false;
-    _lock.lock();
-    if (_value > 0) {
-      _value--;
-      result = true;
-    }
-    _lock.unlock();
-    return result;
-  }
-  void wait() {
-    _lock.lock();
-    if (_value > 0) {
-      _value--;
-      _lock.unlock();
-      return;
-    }
-    _waiting[_tail] = internals::vmem.current_process;
-    _signals[_tail] = 0;
-    next(_tail);
-    _lock.unlock();
-    internals::wait_signal();
-  }
-  bool start_wait(internals::ipc_signal_t sig = 0) {
-    _lock.lock();
-    if (_value > 0) {
-      if (internals::send_signal(internals::vmem.current_process, sig))
-        _value--;
-      _lock.unlock();
-      return false;
-    }
-    _waiting[_tail] = internals::vmem.current_process;
-    _signals[_tail] = sig;
-    next(_tail);
-    _lock.unlock();
-    return true;
-  }
-  void stop_wait() {
-    _lock.lock();
-    for (int i = _head; i != _tail; next(i)) {
-      if (_waiting[i] == internals::vmem.current_process) {
-        int last = i;
-        next(i);
-        while (i != _tail) {
-          _waiting[last] = _waiting[i];
-          _signals[last] = _signals[i];
-          last = i;
-          next(i);
-        }
-        _tail = last;
-        break;
-      }
-    }
-    _lock.unlock();
-  }
   size_t value() {
     return _value;
   }
+  void post();
+  bool try_wait();
+  void wait();
+  bool start_wait(internals::ipc_signal_t sig = 0);
+  void stop_wait();
 };
 
 template <typename T>
@@ -792,17 +727,7 @@ public:
     if (_events != _default_events)
       delete _events;
   }
-  void add(Event *event) {
-    if (_count == _cap) {
-      int newcap = _cap * 3 / 2 + 1;
-      Event **events = new Event *[newcap];
-      memcpy(events, _events, sizeof(Event *) * _count);
-      if (_events == _default_events)
-        delete _events;
-      _events = events;
-    }
-    _events[_count++] = event;
-  }
+  void add(Event *event);
   void add(Event &event) {
     add(&event);
   }
@@ -814,20 +739,7 @@ public:
     add(event);
     return *this;
   }
-  int wait() {
-    size_t n;
-    for (n = 0; n < _count; n++) {
-      if (!_events[n]->start_listen((int) n)) {
-        break;
-      }
-    }
-    internals::ipc_signal_t result = internals::check_signal();
-    for (size_t i = 0; i < n; i++) {
-      _events[i]->stop_listen();
-    }
-    internals::accept_signals();
-    return (int) result;
-  }
+  int wait();
 };
 
 class WaitSemaphore : public Event {
@@ -835,7 +747,8 @@ private:
   VRef<Semaphore> _sem;
 
 public:
-  WaitSemaphore(VRef<Semaphore> sem) : _sem(sem) { }
+  WaitSemaphore(VRef<Semaphore> sem) : _sem(sem) {
+  }
   virtual bool start_listen(internals::ipc_signal_t sig) {
     return _sem->start_wait(sig);
   }
