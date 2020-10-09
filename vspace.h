@@ -327,6 +327,9 @@ public:
   }
   VRef(internals::vaddr_t vaddr) : vaddr(vaddr) {
   }
+  size_t offset() {
+    return vaddr;
+  }
   operator bool() {
     return vaddr != internals::VADDR_NULL;
   }
@@ -679,6 +682,7 @@ public:
           next(i);
         }
         _tail = last;
+        break;
       }
     }
     _lock.unlock();
@@ -718,9 +722,9 @@ private:
     }
   }
   template <typename U>
-  friend class SendEvent;
+  friend class SendQueue;
   template <typename U>
-  friend class ReceiveEvent;
+  friend class ReceiveQueue;
 
   void enqueue_nowait(VRef<T> item) {
     _lock.lock();
@@ -802,25 +806,22 @@ public:
   void add(Event &event) {
     add(&event);
   }
-  EventSet &operator>>(Event *event) {
+  EventSet &operator<<(Event *event) {
     add(event);
     return *this;
   }
-  EventSet &operator>>(Event &event) {
+  EventSet &operator<<(Event &event) {
     add(event);
     return *this;
   }
   int wait() {
     size_t n;
-    internals::ipc_signal_t result = -1;
-    for (size_t n = 0; n < _count; n++) {
-      if (_events[n]->start_listen((int) n)) {
-        result = (int) n;
+    for (n = 0; n < _count; n++) {
+      if (!_events[n]->start_listen((int) n)) {
         break;
       }
     }
-    if (result < 0)
-      result = internals::check_signal();
+    internals::ipc_signal_t result = internals::check_signal();
     for (size_t i = 0; i < n; i++) {
       _events[i]->stop_listen();
     }
@@ -831,9 +832,10 @@ public:
 
 class WaitSemaphore : public Event {
 private:
-  Semaphore *_sem;
+  VRef<Semaphore> _sem;
 
 public:
+  WaitSemaphore(VRef<Semaphore> sem) : _sem(sem) { }
   virtual bool start_listen(internals::ipc_signal_t sig) {
     return _sem->start_wait(sig);
   }
@@ -847,10 +849,10 @@ public:
 template <typename T>
 class SendQueue : public Event {
 private:
-  Queue<T> *_queue;
+  VRef<Queue<T> > _queue;
 
 public:
-  SendQueue(Queue<T> *queue) : _queue(queue) {
+  SendQueue(VRef<Queue<T> > queue) : _queue(queue) {
   }
   virtual bool start_listen(internals::ipc_signal_t sig) {
     return _queue->_outgoing.start_wait(sig);
@@ -866,10 +868,10 @@ public:
 template <typename T>
 class ReceiveQueue : public Event {
 private:
-  Queue<T> *_queue;
+  VRef<Queue<T> > _queue;
 
 public:
-  ReceiveQueue(Queue<T> *queue) : _queue(queue) {
+  ReceiveQueue(VRef<Queue<T> > queue) : _queue(queue) {
   }
   virtual bool start_listen(internals::ipc_signal_t sig) {
     return _queue->_incoming.start_wait(sig);
