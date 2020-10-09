@@ -5,8 +5,8 @@ int main() {
   using namespace vspace;
   vmem_init();
   // Create a queue of strings
-  VRef<Queue<int> > outgoing = vnew<Queue<int> >(100);
-  VRef<Queue<int> > incoming = vnew<Queue<int> >();
+  VRef<Queue<long> > outgoing = vnew<Queue<long> >(100);
+  VRef<Queue<long> > incoming = vnew<Queue<long> >();
   // Fork a process. Child processes will automatically share their
   // parent's vspace configuration. Do not use fork() in conjunction
   // with vspace, as fork_process() needs to do extra work to establish
@@ -14,41 +14,41 @@ int main() {
   pid_t pid = fork_process();
   if (pid == 0) {
     printf("child process started\n");
-    int s = 0;
+    long s = 0;
     for (;;) {
-      VRef<int> msg = outgoing->dequeue();
-      int d = *msg;
+      VRef<long> msg = outgoing->dequeue();
+      long d = *msg;
       s += d;
       msg.free();
       if (d == 0)
         break;
     }
-    printf("C: %d\n", s);
-    incoming->enqueue(vnew<int>(s));
+    printf("C: %ld\n", s);
+    incoming->enqueue(vnew<long>(s));
     exit(0);
   } else if (pid > 0) {
     printf("parent process resumed\n");
-    for (int i = 1; i <= 10000; i++) {
-      outgoing->enqueue(vnew<int>(i)); // write to queue.
+    for (int i = 1; i <= 200000; i++) {
+      outgoing->enqueue(vnew<long>(i)); // write to queue.
     }
     bool sent_sentinel = false;
     for (;;) {
       EventSet events;
-      ReceiveQueue<int> recv(incoming);
-      SendQueue<int> send(outgoing);
+      ReceiveQueue<long> recv(incoming);
+      SendQueue<long> send(outgoing);
       events << recv;
       if (!sent_sentinel)
         events << send;
       switch (events.wait()) {
         case 0: { // recv
-          VRef<int> msg = recv.complete();
-          printf("P: %d\n", *msg);
+          VRef<long> msg = recv.complete();
+          printf("P: %ld\n", *msg);
           msg.free();
           exit(0);
           break;
         }
         case 1: { // send
-          send.complete(vnew<int>(0));
+          send.complete(vnew<long>(0));
           sent_sentinel = true;
           break;
         }

@@ -284,14 +284,16 @@ ipc_signal_t check_signal(bool resume) {
     case Pending: {
       int fd = vmem.channels[vmem.current_process].fd_read;
       char buf[1];
-      unlock_process(vmem.current_process);
-      read(fd, buf, 1);
       if (sigstate == Waiting) {
-        lock_process(vmem.current_process);
-        process_info(vmem.current_process).sigstate
-            = resume ? Waiting : Accepted;
         unlock_process(vmem.current_process);
+        read(fd, buf, 1);
+        lock_process(vmem.current_process);
+      } else {
+        read(fd, buf, 1);
       }
+      process_info(vmem.current_process).sigstate
+          = resume ? Waiting : Accepted;
+      unlock_process(vmem.current_process);
       break;
     }
     case Accepted:
@@ -348,17 +350,19 @@ pid_t fork_process() {
 
 void Semaphore::post() {
   int wakeup = -1;
+  internals::ipc_signal_t sig;
   _lock.lock();
   if (_head == _tail) {
     _value++;
   } else {
     // don't increment value, as we'll pass that on to the next process.
     wakeup = _waiting[_head];
+    sig = _signals[_head];
     next(_head);
   }
   _lock.unlock();
   if (wakeup >= 0) {
-    internals::send_signal(wakeup);
+    internals::send_signal(wakeup, sig);
   }
 }
 
