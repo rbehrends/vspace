@@ -91,7 +91,8 @@ static void print_freelists() {
         vaddr_t last_vaddr = vaddr;
         Block *block = block_ptr(vaddr);
         vaddr = block->next;
-        if (vaddr == VADDR_NULL) break;
+        if (vaddr == VADDR_NULL)
+          break;
         printf(" -> %ld", vaddr);
         vaddr_t prev = block_ptr(vaddr)->prev;
         if (prev != last_vaddr) {
@@ -238,17 +239,79 @@ void init_metapage(bool create) {
   }
 }
 
-void send_signal(int processno) {
-  static char buf[1] = "";
-  // TODO: init channels[] on demand.
-  int fd = vmem.channels[processno].fd_write;
-  write(fd, buf, 1);
+static void lock_process(int processno) {
+  lock_file(vmem.fd,
+      offsetof(MetaPage, process_info)
+          + sizeof(ProcessInfo) * vmem.current_process);
 }
 
-void wait_signal() {
-  char buf[1];
-  int fd = vmem.channels[vmem.current_process].fd_read;
-  read(fd, buf, 1);
+static void unlock_process(int processno) {
+  unlock_file(vmem.fd,
+      offsetof(MetaPage, process_info)
+          + sizeof(ProcessInfo) * vmem.current_process);
+}
+
+static ProcessInfo &process_info(int processno) {
+  return vmem.metapage->process_info[processno];
+}
+
+bool send_signal(int processno, ipc_signal_t sig) {
+  lock_process(processno);
+  if (process_info(processno).sigstate != Waiting) {
+    unlock_process(processno);
+    return false;
+  }
+  if (processno == vmem.current_process) {
+    process_info(processno).sigstate = Accepted;
+    process_info(processno).signal = sig;
+  } else {
+    process_info(processno).sigstate = Pending;
+    process_info(processno).signal = sig;
+    int fd = vmem.channels[processno].fd_write;
+    char buf[1] = { 0 };
+    write(fd, buf, 1);
+  }
+  unlock_process(processno);
+  return true;
+}
+
+ipc_signal_t check_signal(bool resume) {
+  ipc_signal_t result;
+  lock_process(vmem.current_process);
+  SignalState sigstate = process_info(vmem.current_process).sigstate;
+  switch (sigstate) {
+    case Waiting:
+    case Pending: {
+      int fd = vmem.channels[vmem.current_process].fd_read;
+      char buf[1];
+      unlock_process(vmem.current_process);
+      read(fd, buf, 1);
+      if (sigstate == Waiting) {
+        lock_process(vmem.current_process);
+        process_info(vmem.current_process).sigstate
+            = resume ? Waiting : Accepted;
+        unlock_process(vmem.current_process);
+      }
+      break;
+    }
+    case Accepted:
+      result = process_info(vmem.current_process).signal;
+      if (resume)
+        process_info(vmem.current_process).sigstate = Waiting;
+      unlock_process(vmem.current_process);
+      break;
+  }
+  return process_info(vmem.current_process).signal;
+}
+
+void accept_signals() {
+  lock_process(vmem.current_process);
+  process_info(vmem.current_process).sigstate = Waiting;
+  unlock_process(vmem.current_process);
+}
+
+ipc_signal_t wait_signal() {
+  return check_signal(true);
 }
 
 } // namespace internals

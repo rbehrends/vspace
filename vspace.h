@@ -62,16 +62,28 @@ void lock_metapage();
 void unlock_metapage();
 void init_metapage(bool create);
 
-void send_signal(int processno);
-void wait_signal();
+typedef int ipc_signal_t;
+
+bool send_signal(int processno, ipc_signal_t sig = 0);
+ipc_signal_t check_signal(bool resume = false);
+void accept_signals();
+ipc_signal_t wait_signal();
+void drop_pending_signals();
 
 struct Block;
 struct MetaPage;
 struct ProcessChannel;
 
+enum SignalState {
+  Waiting = 0,
+  Pending = 1,
+  Accepted = 2,
+};
+
 struct ProcessInfo {
   pid_t pid;
-  char fifo_path[256 - sizeof(pid_t)];
+  SignalState sigstate; // are there pending signals?
+  ipc_signal_t signal;
 };
 
 struct MetaPage {
@@ -423,7 +435,7 @@ private:
 #if __cplusplus >= 201100
     alignas(T)
 #endif
-    char data[sizeof(T)];
+        char data[sizeof(T)];
     RefCounted() : rc(1) {
     }
   };
@@ -587,7 +599,14 @@ class Semaphore {
 private:
   int _owner;
   int _waiting[internals::MAX_PROCESS + 1];
+  internals::ipc_signal_t _signals[internals::MAX_PROCESS + 1];
   int _head, _tail;
+  void next(int &index) {
+    if (index == internals::MAX_PROCESS)
+      index = 0;
+    else
+      index++;
+  }
   size_t _value;
   Mutex _lock;
 
@@ -602,14 +621,23 @@ public:
       _value++;
     } else {
       // don't increment value, as we'll pass that on to the next process.
-      wakeup = _waiting[_head++];
-      if (_head == internals::MAX_PROCESS + 1)
-        _head = 0;
+      wakeup = _waiting[_head];
+      next(_head);
     }
     _lock.unlock();
     if (wakeup >= 0) {
       internals::send_signal(wakeup);
     }
+  }
+  bool try_wait() {
+    bool result = false;
+    _lock.lock();
+    if (_value > 0) {
+      _value--;
+      result = true;
+    }
+    _lock.unlock();
+    return result;
   }
   void wait() {
     _lock.lock();
@@ -618,11 +646,42 @@ public:
       _lock.unlock();
       return;
     }
-    _waiting[_tail++] = internals::vmem.current_process;
-    if (_tail == internals::MAX_PROCESS + 1)
-      _tail = 0;
+    _waiting[_tail] = internals::vmem.current_process;
+    _signals[_tail] = 0;
+    next(_tail);
     _lock.unlock();
     internals::wait_signal();
+  }
+  bool start_wait(internals::ipc_signal_t sig = 0) {
+    _lock.lock();
+    if (_value > 0) {
+      if (internals::send_signal(internals::vmem.current_process, sig))
+        _value--;
+      _lock.unlock();
+      return false;
+    }
+    _waiting[_tail] = internals::vmem.current_process;
+    _signals[_tail] = sig;
+    next(_tail);
+    _lock.unlock();
+    return true;
+  }
+  void stop_wait() {
+    _lock.lock();
+    for (int i = _head; i != _tail; next(i)) {
+      if (_waiting[i] == internals::vmem.current_process) {
+        int last = i;
+        next(i);
+        while (i != _tail) {
+          _waiting[last] = _waiting[i];
+          _signals[last] = _signals[i];
+          last = i;
+          next(i);
+        }
+        _tail = last;
+      }
+    }
+    _lock.unlock();
   }
   size_t value() {
     return _value;
@@ -636,7 +695,9 @@ private:
     VRef<Node> next;
     VRef<T> data;
   };
-  Semaphore _sem;
+  Semaphore _incoming;
+  Semaphore _outgoing;
+  bool _bounded;
   Mutex _lock;
   VRef<Node> _head, _tail;
   void remove() {
@@ -656,27 +717,168 @@ private:
       _tail = node;
     }
   }
+  template <typename U>
+  friend class SendEvent;
+  template <typename U>
+  friend class ReceiveEvent;
 
-public:
-  Queue() : _sem(0), _head(), _tail(), _lock() {
-  }
-  void enqueue(VRef<T> item) {
+  void enqueue_nowait(VRef<T> item) {
     _lock.lock();
     VRef<Node> node = vnew<Node>();
     node->data = item;
     add(node);
     _lock.unlock();
-    _sem.post();
+    _incoming.post();
   }
-  VRef<T> dequeue() {
-    _sem.wait();
+  VRef<T> dequeue_nowait() {
     _lock.lock();
     VRef<Node> node = _head;
     remove();
     VRef<T> result = node->data;
     node.free();
     _lock.unlock();
+    if (_bounded)
+      _outgoing.post();
     return result;
+  }
+
+public:
+  Queue(size_t bound = 0) :
+      _incoming(0),
+      _outgoing(bound),
+      _bounded(bound != 0),
+      _head(),
+      _tail(),
+      _lock() {
+  }
+  void enqueue(VRef<T> item) {
+    if (_bounded)
+      _outgoing.wait();
+    enqueue_nowait(item);
+  }
+  VRef<T> dequeue() {
+    _incoming.wait();
+    return dequeue_nowait();
+  }
+  VRef<T> try_dequeue() {
+    if (_incoming.try_wait())
+      return dequeue_nowait();
+    else
+      return vnull<T>();
+  }
+};
+
+class Event {
+public:
+  virtual bool start_listen(internals::ipc_signal_t sig) = 0;
+  virtual void stop_listen() = 0;
+};
+
+class EventSet {
+private:
+  Event *_default_events[4];
+  Event **_events;
+  size_t _count;
+  size_t _cap;
+
+public:
+  EventSet() : _count(0), _cap(4), _events(_default_events) {
+  }
+  ~EventSet() {
+    if (_events != _default_events)
+      delete _events;
+  }
+  void add(Event *event) {
+    if (_count == _cap) {
+      int newcap = _cap * 3 / 2 + 1;
+      Event **events = new Event *[newcap];
+      memcpy(events, _events, sizeof(Event *) * _count);
+      if (_events == _default_events)
+        delete _events;
+      _events = events;
+    }
+    _events[_count++] = event;
+  }
+  void add(Event &event) {
+    add(&event);
+  }
+  EventSet &operator>>(Event *event) {
+    add(event);
+    return *this;
+  }
+  EventSet &operator>>(Event &event) {
+    add(event);
+    return *this;
+  }
+  int wait() {
+    size_t n;
+    internals::ipc_signal_t result = -1;
+    for (size_t n = 0; n < _count; n++) {
+      if (_events[n]->start_listen((int) n)) {
+        result = (int) n;
+        break;
+      }
+    }
+    if (result < 0)
+      result = internals::check_signal();
+    for (size_t i = 0; i < n; i++) {
+      _events[i]->stop_listen();
+    }
+    internals::accept_signals();
+    return (int) result;
+  }
+};
+
+class WaitSemaphore : public Event {
+private:
+  Semaphore *_sem;
+
+public:
+  virtual bool start_listen(internals::ipc_signal_t sig) {
+    return _sem->start_wait(sig);
+  }
+  virtual void stop_listen() {
+    _sem->stop_wait();
+  }
+  void complete() {
+  }
+};
+
+template <typename T>
+class SendQueue : public Event {
+private:
+  Queue<T> *_queue;
+
+public:
+  SendQueue(Queue<T> *queue) : _queue(queue) {
+  }
+  virtual bool start_listen(internals::ipc_signal_t sig) {
+    return _queue->_outgoing.start_wait(sig);
+  }
+  virtual void stop_listen() {
+    _queue->_outgoing.stop_wait();
+  }
+  void complete(VRef<T> item) {
+    _queue->enqueue_nowait(item);
+  }
+};
+
+template <typename T>
+class ReceiveQueue : public Event {
+private:
+  Queue<T> *_queue;
+
+public:
+  ReceiveQueue(Queue<T> *queue) : _queue(queue) {
+  }
+  virtual bool start_listen(internals::ipc_signal_t sig) {
+    return _queue->_incoming.start_wait(sig);
+  }
+  virtual void stop_listen() {
+    _queue->_incoming.stop_wait();
+  }
+  VRef<T> complete() {
+    return _queue->dequeue_nowait();
   }
 };
 
