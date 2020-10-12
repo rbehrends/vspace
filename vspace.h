@@ -214,7 +214,7 @@ inline Block *block_ptr(vaddr_t vaddr) {
   return vmem.block_ptr(vaddr);
 }
 
-#ifdef HAVE_ATOMIC_H
+#ifdef HAVE_ATOMIC
 struct refcount_t {
   std::atomic<ptrdiff_t> rc;
   refcount_t(ptrdiff_t init) : rc(init) {
@@ -227,7 +227,7 @@ struct refcount_t {
     rc--;
     return (ptrdiff_t) rc;
   }
-}
+};
 #else
 struct refcount_t {
   ptrdiff_t rc;
