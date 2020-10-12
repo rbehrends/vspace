@@ -129,7 +129,7 @@ void vmem_free(vaddr_t vaddr) {
       prev->next = block->next;
     } else {
       // head of freelist.
-      assert(vmem.freelist[level] == buddy);
+      assert(vmem.freelist[level] == vmem.vaddr(segno, buddy));
       vmem.freelist[level] = block->next;
     }
     if (next) {
