@@ -329,10 +329,10 @@ public:
   }
   VRef(internals::vaddr_t vaddr) : vaddr(vaddr) {
   }
-  size_t offset() {
+  size_t offset() const {
     return vaddr;
   }
-  operator bool() {
+  operator bool() const {
     return vaddr != internals::VADDR_NULL;
   }
   bool is_null() {
@@ -341,16 +341,16 @@ public:
   VRef(void *ptr) {
     vaddr = internals::allocated_ptr_to_vaddr(ptr);
   }
-  void *to_ptr() {
+  void *to_ptr() const {
     return internals::vmem.to_ptr(vaddr);
   }
-  T *as_ptr() {
+  T *as_ptr() const {
     return (T *) to_ptr();
   }
-  T &as_ref() {
+  T &as_ref() const {
     return *(T *) to_ptr();
   }
-  T &operator*() {
+  T &operator*() const {
     return *(T *) to_ptr();
   }
   T *operator->() {
@@ -466,13 +466,13 @@ public:
   ZRef(void *ptr) {
     vaddr = internals::allocated_ptr_to_vaddr(ptr);
   }
-  T *as_ptr() {
+  T *as_ptr() const {
     return (T *) to_ptr();
   }
-  T &as_ref() {
+  T &as_ref() const {
     return *(T *) to_ptr();
   }
-  T &operator*() {
+  T &operator*() const {
     return *(T *) to_ptr();
   }
   T *operator->() {
@@ -482,7 +482,7 @@ public:
     vaddr = other.vaddr;
   }
   template <typename U>
-  ZRef<U> cast() {
+  ZRef<U> cast() const {
     return ZRef<U>(vaddr);
   }
   void retain() {
@@ -580,10 +580,13 @@ public:
   ~VString() {
     _buffer.free();
   }
-  size_t len() {
+  size_t len() const {
     return _len;
   }
-  const char *str() {
+  VRef<VString> clone() const {
+    return vnew<VString>(_buffer.as_ptr(), _len);
+  }
+  const char *str() const {
     return _buffer.as_ptr();
   }
 };
@@ -622,116 +625,22 @@ private:
   }
 
 public:
-  VMap(size_t size = 1024) {
-    _nbuckets = 8;
-    while (_nbuckets < size)
-      _nbuckets *= 2;
-    _buckets = vnew_array<VRef<Node> >(_nbuckets);
-  }
+  VMap(size_t size = 1024);
+  ~VMap();
   bool add(VRef<K> key, VRef<V> value, VRef<K> &oldkey, VRef<V> &oldvalue,
-    bool replace = true) {
-    size_t hash = Spec::hash(key.as_ptr());
-    size_t b = hash & (_nbuckets - 1);
-    _lock_bucket(b);
-    VRef<Node> node = _buckets[b];
-    VRef<Node> last = vnull<Node>();
-    while (!node.is_null()) {
-      Node *node_ptr = node.as_ptr();
-      if (hash == node_ptr->hash
-          && Spec::equal(key.as_ptr(), node_ptr->key.as_ptr())) {
-        value = node_ptr->value;
-        if (!last.is_null()) {
-          // move to front
-          last->next = node_ptr->next;
-          node_ptr->next = _buckets[b];
-          _buckets[b] = node;
-        }
-        oldkey = node_ptr->key;
-        oldvalue = node_ptr->value;
-        if (replace)
-          node_ptr->value = value;
-        _unlock_bucket(b);
-        return false;
-      }
-      last = node;
-      node = node->next;
-    }
-    node = vnew<Node>();
-    Node *node_ptr = node.as_ptr();
-    node_ptr->hash = hash;
-    node_ptr->key = key;
-    node_ptr->value = value;
-    node_ptr->next = _buckets[b];
-    _buckets[b] = node;
-    oldkey = key;
-    oldvalue = value;
-    _unlock_bucket(b);
-    return true;
-  }
+      bool replace = true);
   bool add(VRef<K> key, VRef<V> value, bool replace = true) {
     VRef<K> oldkey;
     VRef<V> oldvalue;
     return add(key, value, oldkey, oldvalue, replace);
   }
-  bool remove(
-      VRef<K> key, VRef<K> &oldkey, VRef<V> &oldvalue) {
-    size_t hash = Spec::hash(key.as_ptr());
-    size_t b = hash & (_nbuckets - 1);
-    _lock_bucket(b);
-    VRef<Node> node = _buckets[b];
-    VRef<Node> last = vnull<Node>();
-    while (!node.is_null()) {
-      Node *node_ptr = node.as_ptr();
-      if (hash == node_ptr->hash
-          && Spec::equal(key.as_ptr(), node_ptr->key.as_ptr())) {
-        oldkey = node_ptr->key;
-        oldvalue = node_ptr->value;
-        // remove from list
-        if (last.is_null()) {
-          _buckets[b] = node_ptr->next;
-        } else {
-          last->next = node_ptr->next;
-        }
-        _unlock_bucket(b);
-        return true;
-      }
-      last = node;
-      node = node->next;
-    }
-    _unlock_bucket(b);
-    return false;
-  }
+  bool remove(VRef<K> key, VRef<K> &oldkey, VRef<V> &oldvalue);
   bool remove(VRef<K> key) {
     VRef<K> oldkey;
     VRef<V> oldvalue;
     return remove(key, oldkey, oldvalue);
   }
-  bool find(VRef<K> key, VRef<V> &value) {
-    size_t hash = Spec::hash(key.as_ptr());
-    size_t b = hash & (_nbuckets - 1);
-    _lock_bucket(b);
-    VRef<Node> node = _buckets[b];
-    VRef<Node> last = vnull<Node>();
-    while (!node.is_null()) {
-      Node *node_ptr = node.as_ptr();
-      if (hash == node_ptr->hash
-          && Spec::equal(key.as_ptr(), node_ptr->key.as_ptr())) {
-        value = node_ptr->value;
-        // move to front
-        if (!last.is_null()) {
-          last->next = node_ptr->next;
-          node_ptr->next = _buckets[b];
-        }
-        _buckets[b] = node;
-        _unlock_bucket(b);
-        return true;
-      }
-      last = node;
-      node = node->next;
-    }
-    _unlock_bucket(b);
-    return false;
-  }
+  bool find(VRef<K> key, VRef<V> &value);
   VRef<V> find(VRef<K> key) {
     VRef<V> value;
     if (find(key, value))
@@ -741,10 +650,134 @@ public:
   }
 };
 
+template <typename Spec>
+VMap<Spec>::VMap(size_t size) {
+  _nbuckets = 8;
+  while (_nbuckets < size)
+    _nbuckets *= 2;
+  _buckets = vnew_array<VRef<Node> >(_nbuckets);
+}
+
+template <typename Spec>
+VMap<Spec>::~VMap() {
+  for (size_t b = 0; b < _nbuckets; b++) {
+    _lock_bucket(b);
+    VRef<Node> node = _buckets[b];
+    while (node) {
+      Node *node_ptr = node.as_ptr();
+      VRef<Node> next = node_ptr->next;
+      Spec::free_key(node_ptr->key);
+      Spec::free_value(node_ptr->value);
+      node.free();
+      node = next;
+    }
+    _unlock_bucket(b);
+  }
+}
+
+template <typename Spec>
+bool VMap<Spec>::add(VRef<K> key, VRef<V> value, VRef<K> &oldkey,
+    VRef<V> &oldvalue, bool replace) {
+  size_t hash = Spec::hash(key.as_ptr());
+  size_t b = hash & (_nbuckets - 1);
+  _lock_bucket(b);
+  VRef<Node> node = _buckets[b];
+  VRef<Node> last = vnull<Node>();
+  while (!node.is_null()) {
+    Node *node_ptr = node.as_ptr();
+    if (hash == node_ptr->hash
+        && Spec::equal(key.as_ptr(), node_ptr->key.as_ptr())) {
+      value = node_ptr->value;
+      if (!last.is_null()) {
+        // move to front
+        last->next = node_ptr->next;
+        node_ptr->next = _buckets[b];
+        _buckets[b] = node;
+      }
+      oldkey = node_ptr->key;
+      oldvalue = node_ptr->value;
+      if (replace)
+        node_ptr->value = value;
+      _unlock_bucket(b);
+      return false;
+    }
+    last = node;
+    node = node->next;
+  }
+  node = vnew<Node>();
+  Node *node_ptr = node.as_ptr();
+  node_ptr->hash = hash;
+  node_ptr->key = key;
+  node_ptr->value = value;
+  node_ptr->next = _buckets[b];
+  _buckets[b] = node;
+  oldkey = key;
+  oldvalue = value;
+  _unlock_bucket(b);
+  return true;
+}
+
+template <typename Spec>
+bool VMap<Spec>::remove(VRef<K> key, VRef<K> &oldkey, VRef<V> &oldvalue) {
+  size_t hash = Spec::hash(key.as_ptr());
+  size_t b = hash & (_nbuckets - 1);
+  _lock_bucket(b);
+  VRef<Node> node = _buckets[b];
+  VRef<Node> last = vnull<Node>();
+  while (!node.is_null()) {
+    Node *node_ptr = node.as_ptr();
+    if (hash == node_ptr->hash
+        && Spec::equal(key.as_ptr(), node_ptr->key.as_ptr())) {
+      oldkey = node_ptr->key;
+      oldvalue = node_ptr->value;
+      // remove from list
+      if (last.is_null()) {
+        _buckets[b] = node_ptr->next;
+      } else {
+        last->next = node_ptr->next;
+      }
+      _unlock_bucket(b);
+      return true;
+    }
+    last = node;
+    node = node->next;
+  }
+  _unlock_bucket(b);
+  return false;
+}
+
+template <typename Spec>
+bool VMap<Spec>::find(VRef<K> key, VRef<V> &value) {
+  size_t hash = Spec::hash(key.as_ptr());
+  size_t b = hash & (_nbuckets - 1);
+  _lock_bucket(b);
+  VRef<Node> node = _buckets[b];
+  VRef<Node> last = vnull<Node>();
+  while (!node.is_null()) {
+    Node *node_ptr = node.as_ptr();
+    if (hash == node_ptr->hash
+        && Spec::equal(key.as_ptr(), node_ptr->key.as_ptr())) {
+      value = node_ptr->value;
+      // move to front
+      if (!last.is_null()) {
+        last->next = node_ptr->next;
+        node_ptr->next = _buckets[b];
+      }
+      _buckets[b] = node;
+      _unlock_bucket(b);
+      return true;
+    }
+    last = node;
+    node = node->next;
+  }
+  _unlock_bucket(b);
+  return false;
+}
+
 struct DictSpec {
   typedef VString Key;
   typedef VString Value;
-  static size_t hash(VString *s) {
+  static size_t hash(const VString *s) {
     // DJB hash
     size_t len = s->len();
     const char *str = s->str();
@@ -754,7 +787,7 @@ struct DictSpec {
     }
     return hash;
   }
-  static bool equal(VString *s1, VString *s2) {
+  static bool equal(const VString *s1, const VString *s2) {
     if (s1->len() != s2->len())
       return false;
     size_t len = s1->len();
@@ -764,6 +797,18 @@ struct DictSpec {
         return false;
     }
     return true;
+  }
+  // By default, we do not make assumptions about ownership. It is
+  // up to the caller to free keys and values if needed or to
+  // define appropriate `free_key()` and `free_value()` functions
+  // that work. Note in particular that keys and values may occur
+  // more than once in a map and if that happens, they must not
+  // be freed multiple times.
+  static void free_key(VRef<Key> key) {
+    // do nothing
+  }
+  static void free_value(VRef<Value> value) {
+    // do nothing
   }
 };
 
