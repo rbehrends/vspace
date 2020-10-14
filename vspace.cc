@@ -93,12 +93,12 @@ void VMem::add_segment() {
   freelist[LOG2_SEGMENT_SIZE] = seg * SEGMENT_SIZE;
 }
 
+// This is a very basic spinlock implementation that does not guarantee
+// fairness.
+//
+// TODO: add a wait queue and/or use futexes on Linux.
 void FastLock::lock() {
 #ifdef HAVE_CPP_THREADS
-  // We only hold the allocator lock for a very short time,
-  // outside of the rare event of mapping a new segment of
-  // memory, so a spinlock implementation is acceptable here.
-  //
   // num_spins is a (conservative) upper bound for the amount
   // of spins we need for a contended lock unless that lock
   // is held by an inactive thread.

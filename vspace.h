@@ -81,6 +81,10 @@ static const size_t MAX_SEGMENTS = 1 << LOG2_MAX_SEGMENTS;
 static const size_t SEGMENT_SIZE = 1 << LOG2_SEGMENT_SIZE;
 static const size_t SEGMENT_MASK = (SEGMENT_SIZE - 1);
 
+// This is a very basic spinlock implementation that does not guarantee
+// fairness.
+//
+// TODO: add a wait queue and/or use futexes on Linux.
 class FastLock {
 private:
 #ifdef HAVE_CPP_THREADS
