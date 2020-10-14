@@ -16,7 +16,7 @@ VMem VMem::vmem_global;
 // a portable version of it for metapage fields.
 
 #define metapageaddr(field) \
-  ((char*)&vmem.metapage->field - (char*)vmem.metapage)
+  ((char *) &vmem.metapage->field - (char *) vmem.metapage)
 
 size_t VMem::filesize() {
   struct stat stat;
@@ -324,7 +324,8 @@ bool send_signal(int processno, ipc_signal_t sig) {
     process_info(processno).signal = sig;
     int fd = vmem.channels[processno].fd_write;
     char buf[1] = { 0 };
-    write(fd, buf, 1);
+    while (write(fd, buf, 1) != 1) {
+    }
   }
   unlock_process(processno);
   return true;
@@ -341,10 +342,12 @@ ipc_signal_t check_signal(bool resume) {
       char buf[1];
       if (sigstate == Waiting) {
         unlock_process(vmem.current_process);
-        read(fd, buf, 1);
+        while (read(fd, buf, 1) != 1) {
+        }
         lock_process(vmem.current_process);
       } else {
-        read(fd, buf, 1);
+        while (read(fd, buf, 1) != 1) {
+        }
       }
       process_info(vmem.current_process).sigstate
           = resume ? Waiting : Accepted;
