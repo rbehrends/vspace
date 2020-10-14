@@ -90,25 +90,37 @@ class FastLock {
 private:
 #ifdef HAVE_CPP_THREADS
   std::atomic_flag _lock;
+  short _owner, _head, _tail;
 #else
   vaddr_t _offset;
 #endif
 public:
 #ifdef HAVE_CPP_THREADS
-  FastLock(vaddr_t offset = 0) {
+  FastLock(vaddr_t offset = 0) : _owner(-1), _head(-1), _tail(-1) {
     _lock.clear();
   }
 #else
   FastLock(vaddr_t offset = 0) : _offset(offset) {
   }
 #endif
+#ifdef HAVE_CPP_THREADS
+  // We only need to define the copy constructur for the
+  // atomic version, as the std::atomic_flag constructor
+  // is deleted.
   FastLock(const FastLock &other) {
-    memcpy(this, &other, sizeof(FastLock));
+    _owner = other._owner;
+    _head = other._head;
+    _tail = other._tail;
+    _lock.clear();
   }
   FastLock &operator=(const FastLock &other) {
-    memcpy(this, &other, sizeof(FastLock));
+    _owner = other._owner;
+    _head = other._head;
+    _tail = other._tail;
+    _lock.clear();
     return *this;
   }
+#endif
   void lock();
   void unlock();
 };
@@ -126,10 +138,10 @@ void init_metapage(bool create);
 
 typedef int ipc_signal_t;
 
-bool send_signal(int processno, ipc_signal_t sig = 0);
-ipc_signal_t check_signal(bool resume = false);
+bool send_signal(int processno, ipc_signal_t sig = 0, bool lock = true);
+ipc_signal_t check_signal(bool resume = false, bool lock = true);
 void accept_signals();
-ipc_signal_t wait_signal();
+ipc_signal_t wait_signal(bool lock = true);
 void drop_pending_signals();
 
 struct Block;
@@ -146,6 +158,9 @@ struct ProcessInfo {
   pid_t pid;
   SignalState sigstate; // are there pending signals?
   ipc_signal_t signal;
+#ifdef HAVE_CPP_THREADS
+  int next; // next in queue waiting for a lock.
+#endif
 };
 
 struct MetaPage {
@@ -882,6 +897,12 @@ typedef VMap<DictSpec> VDict;
 
 pid_t fork_process();
 
+#ifdef HAVE_CPP_THREADS
+typedef internals::FastLock FastLock;
+#else
+typedef internals::Mutex FastLock;
+#endif
+
 typedef internals::Mutex Mutex;
 
 class Semaphore {
@@ -897,11 +918,7 @@ private:
       index++;
   }
   size_t _value;
-#ifdef HAVE_CPP_THREADS
-  internals::FastLock _lock;
-#else
-  Mutex _lock;
-#endif
+  FastLock _lock;
 
 public:
   Semaphore(size_t value = 0) :
@@ -927,7 +944,7 @@ private:
   Semaphore _incoming;
   Semaphore _outgoing;
   bool _bounded;
-  Mutex _lock;
+  FastLock _lock;
   VRef<Node> _head, _tail;
   void remove() {
     VRef<Node> result = _head;

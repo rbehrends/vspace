@@ -93,23 +93,25 @@ void VMem::add_segment() {
   freelist[LOG2_SEGMENT_SIZE] = seg * SEGMENT_SIZE;
 }
 
-// This is a very basic spinlock implementation that does not guarantee
-// fairness.
-//
-// TODO: add a wait queue and/or use futexes on Linux.
 void FastLock::lock() {
 #ifdef HAVE_CPP_THREADS
-  // num_spins is a (conservative) upper bound for the amount
-  // of spins we need for a contended lock unless that lock
-  // is held by an inactive thread.
-  const int num_spins = 10000;
-  for (;;) {
-    for (int i = 0; i < num_spins; i++) {
-      if (!_lock.test_and_set())
-        return;
-    }
-    std::this_thread::yield();
+  while (_lock.test_and_set()) {
   }
+  bool empty = _owner < 0;
+  if (empty) {
+    _owner = vmem.current_process;
+  } else {
+    int p = vmem.current_process;
+    vmem.metapage->process_info[p].next = -1;
+    if (_head < 0)
+      _head = p;
+    else
+      vmem.metapage->process_info[_tail].next = p;
+    _tail = p;
+  }
+  _lock.clear();
+  if (!empty)
+    wait_signal();
 #else
   lock_file(vmem.fd, _offset);
 #endif
@@ -117,7 +119,14 @@ void FastLock::lock() {
 
 void FastLock::unlock() {
 #ifdef HAVE_CPP_THREADS
+  while (_lock.test_and_set()) {
+  }
+  _owner = _head;
+  if (_owner >= 0)
+    _head = vmem.metapage->process_info[_head].next;
   _lock.clear();
+  if (_owner >= 0)
+    send_signal(_owner, 0);
 #else
   unlock_file(vmem.fd, _offset);
 #endif
@@ -310,8 +319,9 @@ static ProcessInfo &process_info(int processno) {
   return vmem.metapage->process_info[processno];
 }
 
-bool send_signal(int processno, ipc_signal_t sig) {
-  lock_process(processno);
+bool send_signal(int processno, ipc_signal_t sig, bool lock) {
+  if (lock)
+    lock_process(processno);
   if (process_info(processno).sigstate != Waiting) {
     unlock_process(processno);
     return false;
@@ -327,20 +337,22 @@ bool send_signal(int processno, ipc_signal_t sig) {
     while (write(fd, buf, 1) != 1) {
     }
   }
-  unlock_process(processno);
+  if (lock)
+    unlock_process(processno);
   return true;
 }
 
-ipc_signal_t check_signal(bool resume) {
+ipc_signal_t check_signal(bool resume, bool lock) {
   ipc_signal_t result;
-  lock_process(vmem.current_process);
+  if (lock)
+    lock_process(vmem.current_process);
   SignalState sigstate = process_info(vmem.current_process).sigstate;
   switch (sigstate) {
     case Waiting:
     case Pending: {
       int fd = vmem.channels[vmem.current_process].fd_read;
       char buf[1];
-      if (sigstate == Waiting) {
+      if (lock && sigstate == Waiting) {
         unlock_process(vmem.current_process);
         while (read(fd, buf, 1) != 1) {
         }
@@ -349,19 +361,22 @@ ipc_signal_t check_signal(bool resume) {
         while (read(fd, buf, 1) != 1) {
         }
       }
+      result = process_info(vmem.current_process).signal;
       process_info(vmem.current_process).sigstate
           = resume ? Waiting : Accepted;
-      unlock_process(vmem.current_process);
+      if (lock)
+        unlock_process(vmem.current_process);
       break;
     }
     case Accepted:
       result = process_info(vmem.current_process).signal;
       if (resume)
         process_info(vmem.current_process).sigstate = Waiting;
-      unlock_process(vmem.current_process);
+      if (lock)
+        unlock_process(vmem.current_process);
       break;
   }
-  return process_info(vmem.current_process).signal;
+  return result;
 }
 
 void accept_signals() {
@@ -370,8 +385,8 @@ void accept_signals() {
   unlock_process(vmem.current_process);
 }
 
-ipc_signal_t wait_signal() {
-  return check_signal(true);
+ipc_signal_t wait_signal(bool lock) {
+  return check_signal(true, lock);
 }
 
 } // namespace internals
