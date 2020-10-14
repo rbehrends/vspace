@@ -1,4 +1,6 @@
-CXXFLAGS=-g -std=c++11
+CXXSTD=c++11
+OPT=-g
+CXXFLAGS=$(OPT) -std=$(CXXSTD)
 BLD=build
 BIN=bin
 LIB=$(BLD)/vspace.o
