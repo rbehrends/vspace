@@ -10,10 +10,10 @@
 #include <new> // for placement new
 
 #if __cplusplus >= 201100
-#define HAVE_ATOMIC
+#define HAVE_CPP_THREADS
 #include <atomic>
 #else
-#undef HAVE_ATOMIC
+#undef HAVE_CPP_THREADS
 #endif
 
 // vspace is a C++ library designed to allow processes in a
@@ -34,6 +34,36 @@
 
 namespace vspace {
 
+enum ErrCode {
+  ErrNone,
+  ErrGeneral,
+  ErrFile,
+  ErrMMap,
+  ErrOS,
+};
+
+template <typename T>
+struct Result {
+  ErrCode err;
+  T result;
+  bool ok() {
+    return err == ErrNone;
+  }
+  Result(ErrCode err, T result) : err(err), result(result) {
+  }
+};
+
+struct Status {
+  ErrCode err;
+  bool ok() {
+    return err == ErrNone;
+  }
+  operator bool() {
+    return err == ErrNone;
+  }
+  Status(ErrCode err) : err(err) { }
+};
+
 namespace internals {
 
 typedef size_t segaddr_t;
@@ -50,6 +80,33 @@ static const int LOG2_MAX_SEGMENTS = 10; // 256 GB
 static const size_t MAX_SEGMENTS = 1 << LOG2_MAX_SEGMENTS;
 static const size_t SEGMENT_SIZE = 1 << LOG2_SEGMENT_SIZE;
 static const size_t SEGMENT_MASK = (SEGMENT_SIZE - 1);
+
+class FastLock {
+private:
+#ifdef HAVE_CPP_THREADS
+  std::atomic_flag _lock;
+#else
+  vaddr_t _offset;
+#endif
+public:
+#ifdef HAVE_CPP_THREADS
+  FastLock(vaddr_t offset = 0) {
+    _lock.clear();
+  }
+#else
+  FastLock(vaddr_t offset = 0) : _offset(offset) {
+  }
+#endif
+  FastLock(const FastLock &other) {
+    memcpy(this, &other, sizeof(FastLock));
+  }
+  FastLock &operator=(const FastLock& other) {
+    memcpy(this, &other, sizeof(FastLock));
+    return *this;
+  }
+  void lock();
+  void unlock();
+};
 
 extern size_t config[4];
 
@@ -88,6 +145,7 @@ struct ProcessInfo {
 
 struct MetaPage {
   size_t config_header[4];
+  FastLock allocator_lock;
   vaddr_t freelist[LOG2_SEGMENT_SIZE + 1];
   int segment_count;
   ProcessInfo process_info[MAX_PROCESS];
@@ -201,9 +259,9 @@ struct VMem {
     return segment(vaddr).ptr(segaddr(vaddr));
   }
   size_t filesize();
-  void init(int fd);
-  void init();
-  bool init(const char *path);
+  Status init(int fd);
+  Status init();
+  Status init(const char *path);
   void *mmap_segment(int seg);
   void add_segment();
 };
@@ -214,7 +272,7 @@ inline Block *block_ptr(vaddr_t vaddr) {
   return vmem.block_ptr(vaddr);
 }
 
-#ifdef HAVE_ATOMIC
+#ifdef HAVE_CPP_THREADS
 struct refcount_t {
   std::atomic<ptrdiff_t> rc;
   refcount_t(ptrdiff_t init) : rc(init) {
@@ -254,8 +312,7 @@ struct refcount_t {
 };
 #endif
 
-static inline int
-find_level(size_t size) {
+static inline int find_level(size_t size) {
   int level = 0;
   while ((1 << (level + 8)) <= size)
     level += 8;
@@ -831,7 +888,11 @@ private:
       index++;
   }
   size_t _value;
+#ifdef HAVE_CPP_THREADS
+  internals::FastLock _lock;
+#else
   Mutex _lock;
+#endif
 
 public:
   Semaphore(size_t value = 0) :

@@ -1,5 +1,9 @@
 #include "vspace.h"
 
+#ifdef HAVE_CPP_THREADS
+#include <thread>
+#endif
+
 namespace vspace {
 namespace internals {
 
@@ -8,19 +12,31 @@ size_t config[4]
 
 VMem VMem::vmem_global;
 
+// offsetof() only works for POD types, so we need to construct
+// a portable version of it for metapage fields.
+
+#define metapageaddr(field) \
+  ((char*)&vmem.metapage->field - (char*)vmem.metapage)
+
 size_t VMem::filesize() {
   struct stat stat;
   fstat(fd, &stat);
   return stat.st_size;
 }
 
-void VMem::init(int fd) {
+Status VMem::init(int fd) {
   this->fd = fd;
   for (int i = 0; i < MAX_SEGMENTS; i++)
     segments[i] = VSeg(NULL);
   for (int i = 0; i < MAX_PROCESS; i++) {
     int channel[2];
-    pipe(channel);
+    if (pipe(channel) < 0) {
+      for (int j = 0; j < i; j++) {
+        close(channels[j].fd_read);
+        close(channels[j].fd_write);
+      }
+      return Status(ErrOS);
+    }
     channels[i].fd_read = channel[0];
     channels[i].fd_write = channel[1];
   }
@@ -28,34 +44,42 @@ void VMem::init(int fd) {
   init_metapage(filesize() == 0);
   unlock_metapage();
   freelist = metapage->freelist;
+  return Status(ErrNone);
 }
 
-void VMem::init() {
+Status VMem::init() {
   FILE *fp = tmpfile();
-  init(fileno(fp));
+  Status result = init(fileno(fp));
+  if (!result.ok())
+    return result;
   current_process = 0;
   metapage->process_info[0].pid = getpid();
+  return Status(ErrNone);
 }
 
-bool VMem::init(const char *path) {
+Status VMem::init(const char *path) {
   int fd = open(path, O_RDWR | O_CREAT, 0600);
   if (fd < 0)
-    return false;
+    return Status(ErrFile);
   init(fd);
   lock_metapage();
   // TODO: enter process in meta table
   unlock_metapage();
-  return true;
+  return Status(ErrNone);
 }
 
 void *VMem::mmap_segment(int seg) {
   lock_metapage();
-  void *result = mmap(NULL, SEGMENT_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED,
-      fd, METABLOCK_SIZE + seg * SEGMENT_SIZE);
-  if (result == MAP_FAILED)
+  void *map = mmap(NULL, SEGMENT_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd,
+      METABLOCK_SIZE + seg * SEGMENT_SIZE);
+  if (map == MAP_FAILED) {
+    // This is an "impossible to proceed from here, because system state
+    // is impossible to proceed from" situation, so we abort the program.
     perror("mmap");
+    abort();
+  }
   unlock_metapage();
-  return result;
+  return map;
 }
 
 void VMem::add_segment() {
@@ -69,12 +93,42 @@ void VMem::add_segment() {
   freelist[LOG2_SEGMENT_SIZE] = seg * SEGMENT_SIZE;
 }
 
+void FastLock::lock() {
+#ifdef HAVE_CPP_THREADS
+  // We only hold the allocator lock for a very short time,
+  // outside of the rare event of mapping a new segment of
+  // memory, so a spinlock implementation is acceptable here.
+  //
+  // num_spins is a (conservative) upper bound for the amount
+  // of spins we need for a contended lock unless that lock
+  // is held by an inactive thread.
+  const int num_spins = 10000;
+  for (;;) {
+    for (int i = 0; i < num_spins; i++) {
+      if (!_lock.test_and_set())
+        return;
+    }
+    std::this_thread::yield();
+  }
+#else
+  lock_file(vmem.fd, _offset);
+#endif
+}
+
+void FastLock::unlock() {
+#ifdef HAVE_CPP_THREADS
+  _lock.clear();
+#else
+  unlock_file(vmem.fd, _offset);
+#endif
+}
+
 static void lock_allocator() {
-  lock_file(vmem.fd, offsetof(MetaPage, freelist));
+  vmem.metapage->allocator_lock.lock();
 }
 
 static void unlock_allocator() {
-  unlock_file(vmem.fd, offsetof(MetaPage, freelist));
+  vmem.metapage->allocator_lock.unlock();
 }
 
 static void print_freelists() {
@@ -234,6 +288,7 @@ void init_metapage(bool create) {
       vmem.metapage->freelist[i] = VADDR_NULL;
     }
     vmem.metapage->segment_count = 0;
+    vmem.metapage->allocator_lock = FastLock(metapageaddr(allocator_lock));
   } else {
     assert(memcmp(vmem.metapage->config_header, config, sizeof(config)) != 0);
   }
@@ -241,13 +296,13 @@ void init_metapage(bool create) {
 
 static void lock_process(int processno) {
   lock_file(vmem.fd,
-      offsetof(MetaPage, process_info)
+      metapageaddr(process_info)
           + sizeof(ProcessInfo) * vmem.current_process);
 }
 
 static void unlock_process(int processno) {
   unlock_file(vmem.fd,
-      offsetof(MetaPage, process_info)
+      metapageaddr(process_info)
           + sizeof(ProcessInfo) * vmem.current_process);
 }
 
