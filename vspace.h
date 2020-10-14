@@ -61,7 +61,8 @@ struct Status {
   operator bool() {
     return err == ErrNone;
   }
-  Status(ErrCode err) : err(err) { }
+  Status(ErrCode err) : err(err) {
+  }
 };
 
 namespace internals {
@@ -104,7 +105,7 @@ public:
   FastLock(const FastLock &other) {
     memcpy(this, &other, sizeof(FastLock));
   }
-  FastLock &operator=(const FastLock& other) {
+  FastLock &operator=(const FastLock &other) {
     memcpy(this, &other, sizeof(FastLock));
     return *this;
   }
@@ -672,17 +673,14 @@ private:
     VRef<V> value;
   };
   VRef<VRef<Node> > _buckets;
+  VRef<internals::FastLock> _locks;
   size_t _nbuckets;
 
   void _lock_bucket(size_t b) {
-    internals::lock_file(internals::vmem.fd,
-        internals::METABLOCK_SIZE + _buckets.offset()
-            + sizeof(VRef<Node>) * b);
+    _locks[b].lock();
   }
   void _unlock_bucket(size_t b) {
-    internals::unlock_file(internals::vmem.fd,
-        internals::METABLOCK_SIZE + _buckets.offset()
-            + sizeof(VRef<Node>) * b);
+    _locks[b].unlock();
   }
 
 public:
@@ -713,10 +711,15 @@ public:
 
 template <typename Spec>
 VMap<Spec>::VMap(size_t size) {
+  using namespace internals;
   _nbuckets = 8;
   while (_nbuckets < size)
     _nbuckets *= 2;
   _buckets = vnew_array<VRef<Node> >(_nbuckets);
+  _locks = vnew_uninitialized_array<FastLock>(_nbuckets);
+  for (size_t i = 0; i < _nbuckets; i++)
+    _locks[i]
+        = FastLock(METABLOCK_SIZE + _locks.offset() + sizeof(FastLock) * i);
 }
 
 template <typename Spec>
@@ -734,6 +737,8 @@ VMap<Spec>::~VMap() {
     }
     _unlock_bucket(b);
   }
+  _buckets.free();
+  _locks.free();
 }
 
 template <typename Spec>
