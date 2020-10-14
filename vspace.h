@@ -61,7 +61,8 @@ struct Status {
   operator bool() {
     return err == ErrNone;
   }
-  Status(ErrCode err) : err(err) { }
+  Status(ErrCode err) : err(err) {
+  }
 };
 
 namespace internals {
@@ -104,7 +105,7 @@ public:
   FastLock(const FastLock &other) {
     memcpy(this, &other, sizeof(FastLock));
   }
-  FastLock &operator=(const FastLock& other) {
+  FastLock &operator=(const FastLock &other) {
     memcpy(this, &other, sizeof(FastLock));
     return *this;
   }
@@ -717,7 +718,8 @@ VMap<Spec>::VMap(size_t size) {
   _buckets = vnew_array<VRef<Node> >(_nbuckets);
   _locks = vnew_uninitialized_array<FastLock>(_nbuckets);
   for (size_t i = 0; i < _nbuckets; i++)
-    _locks[i] = FastLock(_locks.offset() + sizeof(FastLock) * i);
+    _locks[i]
+        = FastLock(METABLOCK_SIZE + _locks.offset() + sizeof(FastLock) * i);
 }
 
 template <typename Spec>
