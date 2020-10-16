@@ -834,8 +834,10 @@ bool VMap<Spec>::add(VRef<K> key, VRef<V> value, VRef<K> &oldkey,
       }
       oldkey = node_ptr->key;
       oldvalue = node_ptr->value;
-      if (replace)
+      if (replace) {
+        node_ptr->key = key;
         node_ptr->value = value;
+      }
       _unlock_bucket(b);
       return false;
     }

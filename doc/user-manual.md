@@ -145,9 +145,67 @@ It is guaranteed that the strings returned by `str()` are null-terminated, thoug
         printf("%s %s\n", alpha->str(), abc->str());
         printf("%d %d\n", (int) alpha->len(), (int) abc->len());
 
+Shared strings also support a `clone()` method, which creates a copy of the string.
+
 # Shared hash tables <a name="vmap"></a>
 
 VSpace supports hash tables stored in shared memory. These hash tables have a fixed number of buckets and can access different buckets concurrently. Basic operations supported are adding, removing, and looking up elements. An implementation provides hash stables that implement mappings from and to shared strings; however, users can also implement hash tables for other types, including with custom hash and comparison functions.
+
+The most basic hash table is the `VDict` class, which uses shared strings both as keys and values.
+
+Writing to a shared hash table:
+
+        VRef<VDict> dict = vnew<VDict>();
+        VRef<VString> key = vstring("key"), value = vstring("value");
+        dict->add(key, value);
+
+The `add()` method has an optional parameter that decides whether an existing key should be overwritten; it returns `true` if a new entry was added and `false` if an existing entry was overwritten. Overwriting an entry also replaces the key:
+
+        dict->add(key, value, true); // replace the entry
+        dict->add(key, value, false); // don't replace the entry
+
+Testing if a key is in a shared hash table:
+
+        if (dict->find(key)) { ... }
+
+Removing an entry from the hash table:
+
+        dict->remove(key);
+
+Note that removing an entry from the hash table will *not* free either the key or the value. The caller must free those explicitly if it is needed, which is not always the case (e.g. if keys or values are being reused and their lifetime ends with a function's scope).
+
+All methods support optional parameters to obtain the original key and value:
+
+        bool find(VRef<Key> key,
+                VRef<Key> orig_key, VRef<Value> orig_value);
+        bool remove(VRef<Key> key,
+                VRef<Key> orig_key, VRef<Value> orig_value);
+        bool add(VRef<Key> key, VRef<VString> Value,
+                VRef<Key> orig_key, VRef<Value> orig_value,
+                bool replace = true);
+
+When using `find()`, `orig_key` and `orig_value` will contain the actual key and value found (note that two keys may compare as equal and still be distinct).
+
+When using `add()`, `orig_key` and `orig_value` will contain the original key and value if they were overwritten and their values are undefined otherwise.
+
+When using `remove()`, `orig_key` and `orig_value` will contain the removed key and value.
+
+The `VMap<Spec>` class is a more general hash table type. The `Spec` parameter must be a struct that defines the types and static functions that paramterize the hash table:
+
+        struct SomeSpec {
+          typedef ... Key; // key type
+          typedef ... Value; // value type
+          static bool equal(Key *key1, Key *key2) { ... }
+          static size_t hash(Key *key);
+          static void free_key(VRef<Key> key) { ... }
+          static void free_value(VRef<Value> value) { ... }
+        };
+
+Note that the `equal()` and `hash()` functions take pointers to `Key` instead of `VRef<Key>` arguments. The `equal()` function should return `true` iff the two keys compare as equal. The `hash()` function should return a hash value for the key.
+
+The `free_key()` and `free_value()` functions should normally be no-ops. If they are not, then the `VMap<Spec>` destructor will use them to free keys and values. For this to be safe, the hash table generally must not contain duplicate keys or values. Neither function is used for `remove()`. When calling `remove()`, it is the caller's responsibility to free memory for keys and values.
+
+See `tests/5-dict.cc` and `tests/6-altdict.cc` for concrete examples.
 
 # Mutexes <a name="mutex"></a>
 
@@ -218,7 +276,26 @@ If this is not possible, the data has to be packaged in a portable format (such 
 
 # Synchronization variables <a name="syncvar"></a>
 
-Synchronization variables are storage locations that can be written once, read multiple times, and where reads block until the synchronization variable has been written to for the first time. 
+Synchronization variables are storage locations that can be written once, read multiple times, and where reads block until the synchronization variable has been written to for the first time. The `SyncVar<T>` class has a `write()` method, which takes an argument of type `T` and writes it to the synchronization variable. It returns `true` if it was successful and `false` if the synchronization variable already contained a value, in which case the second write was ignored. The `read()` method blocks until the synchronization variable has been written to, then returns the value. The `test()` method returns `true` if the synchronization variable has been written to, `false` otherwise.
+
+Example:
+
+        VRef<SyncVar<int> > syncvar = vnew<SyncVar<int> >();
+        pid_t pid = fork_process();
+        if (pid == 0) {
+          // child process
+          sleep(1); // make parent block
+          syncvar->write(99);
+          exit(0);
+        } else if (pid > 0) {
+          // parent process
+          printf("%s\n", syncvar->read());
+          printf("%s\n", syncvar->read()); // Second call should match.
+          waitpid(pid, NULL, 0); // wait for child to finish.
+        } else {
+          perror("fork()");
+          exit(1);
+        }
 
 # Event sets and polling <a name="eventsets"></a>
 
