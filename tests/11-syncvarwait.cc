@@ -6,7 +6,7 @@ int main() {
   vmem_init();
   // Create a queue of strings
   VRef<Queue<VRef<long> > > outgoing = vnew<Queue<VRef<long> > >(100);
-  VRef<Queue<VRef<long> > > incoming = vnew<Queue<VRef<long> > >();
+  VRef<SyncVar<long> > incoming = vnew<SyncVar<long> >();
   // Fork a process. Child processes will automatically share their
   // parent's vspace configuration. Do not use fork() in conjunction
   // with vspace, as fork_process() needs to do extra work to establish
@@ -24,7 +24,7 @@ int main() {
         break;
     }
     printf("C: %ld\n", s);
-    incoming->enqueue(vnew<long>(s));
+    incoming->write(s);
     exit(0);
   } else if (pid > 0) {
     printf("parent process resumed\n");
@@ -34,16 +34,15 @@ int main() {
     bool sent_sentinel = false;
     for (;;) {
       EventSet events;
-      DequeueEvent<VRef<long> > recv(incoming);
+      SyncReadEvent<long> recv(incoming);
       EnqueueEvent<VRef<long> > send(outgoing);
       events << recv;
       if (!sent_sentinel)
         events << send;
       switch (events.wait()) {
         case 0: { // recv
-          VRef<long> msg = recv.complete();
-          printf("P: %ld\n", *msg);
-          msg.free();
+          long value = recv.complete();
+          printf("P: %ld\n", value);
           exit(0);
           break;
         }
