@@ -5,8 +5,8 @@ int main() {
   using namespace vspace;
   vmem_init();
   // Create a queue of strings
-  VRef<Queue<long> > outgoing = vnew<Queue<long> >(100);
-  VRef<Queue<long> > incoming = vnew<Queue<long> >();
+  VRef<Queue<VRef<long> > > outgoing = vnew<Queue<VRef<long> > >(100);
+  VRef<Queue<VRef<long> > > incoming = vnew<Queue<VRef<long> > >();
   // Fork a process. Child processes will automatically share their
   // parent's vspace configuration. Do not use fork() in conjunction
   // with vspace, as fork_process() needs to do extra work to establish
@@ -34,8 +34,8 @@ int main() {
     bool sent_sentinel = false;
     for (;;) {
       EventSet events;
-      ReceiveQueue<long> recv(incoming);
-      SendQueue<long> send(outgoing);
+      ReceiveQueue<VRef<long> > recv(incoming);
+      SendQueue<VRef<long> > send(outgoing);
       events << recv;
       if (!sent_sentinel)
         events << send;

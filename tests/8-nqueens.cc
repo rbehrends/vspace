@@ -7,6 +7,7 @@ const int nworkers = 8;
 
 pid_t workers[nworkers];
 enum TaskType {
+  None,
   CheckBoard,
   Terminate,
 };
@@ -14,6 +15,7 @@ enum TaskType {
 struct Task {
   TaskType type;
   int a, b;
+  Task() : type(None), a(0), b(0) { }
   Task(TaskType type, int a = 0, int b = 0) : type(type), a(a), b(b) {}
 };
 
@@ -52,18 +54,22 @@ VRef<Queue<int> > result_queue;
 
 void worker() {
   for (;;) {
-    VRef<Task> msg = task_queue->dequeue();
-    Task task = *msg;
-    msg.free();
-    if (task.type == Terminate) {
-      result_queue->enqueue(vnew<int>(-1));
-      exit(0);
+    Task task = task_queue->dequeue();
+    switch (task.type) {
+      case Terminate:
+        result_queue->enqueue(-1);
+        exit(0);
+      case CheckBoard: {
+        Board board = Board();
+        board.squares[0][task.a] = true;
+        board.squares[1][task.b] = true;
+        int solutions = board.count_solutions(2); // skip top two levels
+        result_queue->enqueue(solutions);
+        break;
+      }
+      case None:
+        break;
     }
-    Board board = Board();
-    board.squares[0][task.a] = true;
-    board.squares[1][task.b] = true;
-    int solutions = board.count_solutions(2);
-    result_queue->enqueue(vnew<int>(solutions));
   }
 }
 
@@ -85,18 +91,16 @@ int main() {
   for (int i = 0; i < nqueens; i++) {
     for (int j = 0; j < nqueens; j++) {
       if (abs(i-j) >= 2)
-        task_queue->enqueue(vnew<Task>(CheckBoard, i, j));
+        task_queue->enqueue(Task(CheckBoard, i, j));
     }
   }
   for (int i = 0; i < nworkers; i++) {
-    task_queue->enqueue(vnew<Task>(Terminate));
+    task_queue->enqueue(Task(Terminate));
   }
   int result = 0;
   for (int i = 0; i < nworkers; i++) {
     for (;;) {
-      VRef<int> msg = result_queue->dequeue();
-      int d = *msg;
-      msg.free();
+      int d = result_queue->dequeue();
       if (d < 0)
         break;
       result += d;

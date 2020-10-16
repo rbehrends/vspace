@@ -7,11 +7,12 @@ using namespace vspace;
 int main() {
   vmem_init();
   const int n = 10*1024*1024;
-  Queue<int> queue = Queue<int>();
+  VRef<Queue<VRef<int> > > queue = vnew<Queue<VRef<int> > >();
+  Queue<VRef<int> > *q = queue.as_ptr();
   for (int i = 0; i < n; i++)
-    queue.enqueue(vnew<int>(i));
+    q->enqueue(vnew<int>(i));
   for (int i = 0; i < n; i++)
-    queue.dequeue().free();
+    q->dequeue().free();
   printf("%ld\n", vspace::internals::vmem.filesize());
   vmem_deinit();
   return 0;

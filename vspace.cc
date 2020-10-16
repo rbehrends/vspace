@@ -276,6 +276,7 @@ vaddr_t vmem_alloc(size_t size) {
     vmem.block_ptr(block->next)->prev = VADDR_NULL;
   block->mark_as_allocated(vaddr, level);
   unlock_allocator();
+  memset(block->data, 0, size);
   return result;
 }
 
