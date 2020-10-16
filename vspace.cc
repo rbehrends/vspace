@@ -53,6 +53,7 @@ Status VMem::init() {
   if (!result.ok())
     return result;
   current_process = 0;
+  file_handle = fp;
   metapage->process_info[0].pid = getpid();
   return Status(ErrNone);
 }
@@ -66,6 +67,27 @@ Status VMem::init(const char *path) {
   // TODO: enter process in meta table
   unlock_metapage();
   return Status(ErrNone);
+}
+
+void VMem::deinit() {
+  if (file_handle) {
+    fclose(file_handle);
+    file_handle = NULL;
+  } else {
+    close(fd);
+  }
+  munmap(metapage, METABLOCK_SIZE);
+  metapage = NULL;
+  current_process = -1;
+  freelist = NULL;
+  for (int i = 0; i < MAX_SEGMENTS; i++) {
+    munmap(segments[i].base, SEGMENT_SIZE);
+    segments[i] = NULL;
+  }
+  for (int i = 0; i < MAX_PROCESS; i++) {
+    close(channels[i].fd_read);
+    close(channels[i].fd_write);
+  }
 }
 
 void *VMem::mmap_segment(int seg) {

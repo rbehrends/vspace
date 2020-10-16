@@ -44,12 +44,16 @@ enum ErrCode {
 
 template <typename T>
 struct Result {
-  ErrCode err;
+  bool ok;
   T result;
-  bool ok() {
-    return err == ErrNone;
+  Result(T result) : ok(true), result(result) {
   }
-  Result(ErrCode err, T result) : err(err), result(result) {
+  Result() : ok(false), T(default_value()) {
+  }
+private:
+  T& default_value() {
+    static T result;
+    return result;
   }
 };
 
@@ -243,6 +247,7 @@ struct VMem {
   static VMem vmem_global;
   MetaPage *metapage;
   int fd;
+  FILE *file_handle;
   int current_process; // index into process table
   vaddr_t *freelist; // reference to metapage information
   VSeg segments[MAX_SEGMENTS];
@@ -282,6 +287,7 @@ struct VMem {
   Status init(int fd);
   Status init();
   Status init(const char *path);
+  void deinit();
   void *mmap_segment(int seg);
   void add_segment();
 };
@@ -389,11 +395,12 @@ public:
 
 }; // namespace internals
 
-static inline void vmem_init() {
-  internals::vmem.init();
+static inline Status vmem_init() {
+  return internals::vmem.init();
 }
 
 static inline void vmem_deinit() {
+  internals::vmem.deinit();
 }
 
 template <typename T>
@@ -449,6 +456,51 @@ public:
   }
   void free() {
     as_ptr()->~T(); // explicitly call destructor
+    internals::vmem_free(vaddr);
+    vaddr = internals::VADDR_NULL;
+  }
+};
+
+template <>
+struct VRef<void> {
+private:
+  internals::vaddr_t vaddr;
+
+public:
+  VRef() : vaddr(internals::VADDR_NULL) {
+  }
+  VRef(internals::vaddr_t vaddr) : vaddr(vaddr) {
+  }
+  size_t offset() const {
+    return vaddr;
+  }
+  operator bool() const {
+    return vaddr != internals::VADDR_NULL;
+  }
+  bool is_null() {
+    return vaddr == internals::VADDR_NULL;
+  }
+  VRef(void *ptr) {
+    vaddr = internals::allocated_ptr_to_vaddr(ptr);
+  }
+  void *to_ptr() const {
+    return internals::vmem.to_ptr(vaddr);
+  }
+  void *as_ptr() const {
+    return (void *) to_ptr();
+  }
+  VRef<void> &operator=(VRef<void> other) {
+    vaddr = other.vaddr;
+    return *this;
+  }
+  template <typename U>
+  VRef<U> cast() {
+    return VRef<U>(vaddr);
+  }
+  static VRef<void> alloc(size_t n = 1) {
+    return VRef<void>(internals::vmem_alloc(n));
+  }
+  void free() {
     internals::vmem_free(vaddr);
     vaddr = internals::VADDR_NULL;
   }
@@ -1001,6 +1053,14 @@ public:
     if (_bounded)
       _outgoing.wait();
     enqueue_nowait(item);
+  }
+  bool try_enqueue(VRef<T> item) {
+    if (_bounded && _outgoing.try_wait()) {
+      enqueue_nowait(item);
+      return true;
+    } else {
+      return false;
+    }
   }
   VRef<T> dequeue() {
     _incoming.wait();
