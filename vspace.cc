@@ -133,7 +133,7 @@ void FastLock::lock() {
   }
   _lock.clear();
   if (!empty)
-    wait_signal();
+    wait_signal(false);
 #else
   lock_file(vmem.fd, _offset);
 #endif
@@ -148,7 +148,7 @@ void FastLock::unlock() {
     _head = vmem.metapage->process_info[_head].next;
   _lock.clear();
   if (_owner >= 0)
-    send_signal(_owner, 0);
+    send_signal(_owner, 0, false);
 #else
   unlock_file(vmem.fd, _offset);
 #endif
