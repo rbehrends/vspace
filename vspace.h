@@ -48,7 +48,7 @@ struct Result {
   T result;
   Result(T result) : ok(true), result(result) {
   }
-  Result() : ok(false), T(default_value()) {
+  Result() : ok(false), result(default_value()) {
   }
 private:
   T& default_value() {
@@ -407,11 +407,13 @@ template <typename T>
 struct VRef {
 private:
   internals::vaddr_t vaddr;
-
+  VRef(internals::vaddr_t vaddr) : vaddr(vaddr) {
+  }
 public:
   VRef() : vaddr(internals::VADDR_NULL) {
   }
-  VRef(internals::vaddr_t vaddr) : vaddr(vaddr) {
+  static VRef<T> from_vaddr(internals::vaddr_t vaddr) {
+    return VRef(vaddr);
   }
   size_t offset() const {
     return vaddr;
@@ -449,7 +451,7 @@ public:
   }
   template <typename U>
   VRef<U> cast() {
-    return VRef<U>(vaddr);
+    return VRef<U>::from_vaddr(vaddr);
   }
   static VRef<T> alloc(size_t n = 1) {
     return VRef<T>(internals::vmem_alloc(n * sizeof(T)));
@@ -465,11 +467,14 @@ template <>
 struct VRef<void> {
 private:
   internals::vaddr_t vaddr;
+  VRef(internals::vaddr_t vaddr) : vaddr(vaddr) {
+  }
 
 public:
   VRef() : vaddr(internals::VADDR_NULL) {
   }
-  VRef(internals::vaddr_t vaddr) : vaddr(vaddr) {
+  static VRef<void> from_vaddr(internals::vaddr_t vaddr) {
+    return VRef(vaddr);
   }
   size_t offset() const {
     return vaddr;
@@ -495,7 +500,7 @@ public:
   }
   template <typename U>
   VRef<U> cast() {
-    return VRef<U>(vaddr);
+    return VRef<U>::from_vaddr(vaddr);
   }
   static VRef<void> alloc(size_t n = 1) {
     return VRef<void>(internals::vmem_alloc(n));
@@ -508,7 +513,7 @@ public:
 
 template <typename T>
 VRef<T> vnull() {
-  return VRef<T>(internals::VADDR_NULL);
+  return VRef<T>::from_vaddr(internals::VADDR_NULL);
 }
 
 template <typename T>
@@ -991,22 +996,23 @@ class Queue {
 private:
   struct Node {
     VRef<Node> next;
-    VRef<T> data;
+    T data;
   };
   Semaphore _incoming;
   Semaphore _outgoing;
   bool _bounded;
   FastLock _lock;
   VRef<Node> _head, _tail;
-  void remove() {
+  VRef<Node> pop() {
     VRef<Node> result = _head;
     if (_head->next.is_null()) {
       _head = _tail = vnull<Node>();
     } else {
       _head = _head->next;
     }
+    return result;
   }
-  void add(VRef<Node> node) {
+  void push(VRef<Node> node) {
     node->next = vnull<Node>();
     if (_tail.is_null()) {
       _head = _tail = node;
@@ -1020,19 +1026,19 @@ private:
   template <typename U>
   friend class ReceiveQueue;
 
-  void enqueue_nowait(VRef<T> item) {
+  void enqueue_nowait(T item) {
     _lock.lock();
     VRef<Node> node = vnew<Node>();
     node->data = item;
-    add(node);
+    push(node);
     _lock.unlock();
     _incoming.post();
   }
-  VRef<T> dequeue_nowait() {
+  T dequeue_nowait() {
     _lock.lock();
-    VRef<Node> node = _head;
-    remove();
-    VRef<T> result = node->data;
+    VRef<Node> node = pop();
+    T result;
+    result = node->data;
     node.free();
     _lock.unlock();
     if (_bounded)
@@ -1049,12 +1055,12 @@ public:
       _tail(),
       _lock() {
   }
-  void enqueue(VRef<T> item) {
+  void enqueue(T item) {
     if (_bounded)
       _outgoing.wait();
     enqueue_nowait(item);
   }
-  bool try_enqueue(VRef<T> item) {
+  bool try_enqueue(T item) {
     if (_bounded && _outgoing.try_wait()) {
       enqueue_nowait(item);
       return true;
@@ -1062,15 +1068,15 @@ public:
       return false;
     }
   }
-  VRef<T> dequeue() {
+  T dequeue() {
     _incoming.wait();
     return dequeue_nowait();
   }
-  VRef<T> try_dequeue() {
+  Result<T> try_dequeue() {
     if (_incoming.try_wait())
-      return dequeue_nowait();
+      return Result<T>(dequeue_nowait());
     else
-      return vnull<T>();
+      return Result<T>();
   }
 };
 
@@ -1140,7 +1146,7 @@ public:
   virtual void stop_listen() {
     _queue->_outgoing.stop_wait();
   }
-  void complete(VRef<T> item) {
+  void complete(T item) {
     _queue->enqueue_nowait(item);
   }
 };
@@ -1159,7 +1165,7 @@ public:
   virtual void stop_listen() {
     _queue->_incoming.stop_wait();
   }
-  VRef<T> complete() {
+  T complete() {
     return _queue->dequeue_nowait();
   }
 };
