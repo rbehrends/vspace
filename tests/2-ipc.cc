@@ -37,6 +37,7 @@ int main() {
     queue.free();
     sem.free();
     mutex.free();
+    vmem_deinit();
   } else {
     printf("fork() failed\n");
   }

@@ -35,6 +35,7 @@ int main() {
     // the last process using the shared memory exits, we do it here
     // explicitly to test that explicit freeing works properly.
     queue.free();
+    vmem_deinit();
   } else {
     printf("fork() failed\n");
   }

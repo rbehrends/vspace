@@ -63,5 +63,6 @@ int main() {
   assert(!dict->add(delta, alpha, k, v));
   assert(DictSpec::equal(v.as_ptr(), delta.as_ptr()));
   dict.free();
+  vmem_deinit();
   return 0;
 }

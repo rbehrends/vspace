@@ -106,4 +106,5 @@ int main() {
   fflush(stdout);
   for (int i = 0; i < nworkers; i++)
     waitpid(workers[i], NULL, 0);
+  vmem_deinit();
 }

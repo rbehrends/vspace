@@ -42,5 +42,6 @@ int main() {
   VStr k, v;
   assert(!dict->add(delta, alpha, k, v));
   assert(DictSpec::equal(v.as_ptr(), delta.as_ptr()));
+  vmem_deinit();
   return 0;
 }
