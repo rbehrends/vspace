@@ -1,4 +1,5 @@
 #include "vspace.h"
+#include <sys/wait.h>
 
 using namespace vspace;
 
