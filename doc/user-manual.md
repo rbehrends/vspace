@@ -33,7 +33,7 @@ Various examples can be found in the `tests` directory.
 
 The entire library is contained in two files, `vspace.h` and `vspace.cc`. It is sufficient to add these to your project as standalone files, though you can also compile `vspace.cc` into a separate library if desired.
 
-All user level functionality is contained in the namespace `vspace`. Non-portable implementation details are contained in the namespace `vspace::internals`.
+All public functionality is contained in the namespace `vspace`. Non-portable implementation details are contained in the namespace `vspace::internals`.
 
 The basic skeleton for a program using VSpace looks as follows:
 
@@ -232,7 +232,9 @@ Example:
 
 Queues are FIFO queues that implement basic `enqueue()`, `dequeue()`, `try_enqueue()` and `try_dequeue()` operations. Optionally, they support an upper bound on the number of elements in the queue.
 
-For a `Queue<T>`, the `enqueue()` method takes an argument of type `T` and adds it the the back of the queue. If the queue has a bounded size and adding it to the queue would exceed the size, then the operation will block until an element has been dequeued. The `try_enqueue()` is a non-blocking version, which will return true if the operation succeeded and false if `enqueue()` would have blocked.
+The constructor of `Queue<T>` takes an optional `size_t` argument, which denotes the number of elements the queue can hold. If it is omitted or zero, the queue's capacity is only limited by available memory.
+
+For a `Queue<T>` instance, the `enqueue()` method takes an argument of type `T` and adds it the the back of the queue. If the queue has a bounded size and adding it to the queue would exceed the size, then the operation will block until an element has been dequeued. The `try_enqueue()` is a non-blocking version, which will return true if the operation succeeded and false if `enqueue()` would have blocked.
 
 The `dequeue()` method checks if the queue is empty. If it is empty, it will block until the queue contains at least one element. When it is not empty, it will remove the first element that was enqueued and return it. The `try_dequeue()` method is a non-blocking version that returns a `Result<T>` struct. This struct has a boolean member `ok` to signal if the dequeue operation succeeded and a `result` member that will contain the result if it was successful.
 
@@ -240,6 +242,8 @@ Implementation detail: the type `T` must have a default and a copy constructor. 
 
 Example:
 
+        // Create a bounded queue with a maximum capacity of one
+        // element.
         VRef<Queue<int> > fifo = vnew<Queue<int> >(1);
         fifo.enqueue(1);
         assert(!fifo.try_enqueue(2));
@@ -276,7 +280,7 @@ If this is not possible, the data has to be packaged in a portable format (such 
 
 # Synchronization variables <a name="syncvar"></a>
 
-Synchronization variables are storage locations that can be written once, read multiple times, and where reads block until the synchronization variable has been written to for the first time. The `SyncVar<T>` class has a `write()` method, which takes an argument of type `T` and writes it to the synchronization variable. It returns `true` if it was successful and `false` if the synchronization variable already contained a value, in which case the second write was ignored. The `read()` method blocks until the synchronization variable has been written to, then returns the value. The `test()` method returns `true` if the synchronization variable has been written to, `false` otherwise.
+Synchronization variables are shared storage locations that can be written to once, read multiple times, and where reads block until the synchronization variable has been written to for the first time. The `SyncVar<T>` class has a `write()` method, which takes an argument of type `T` and writes it to the synchronization variable. It returns `true` if it was successful and `false` if the synchronization variable already contained a value, in which case the second write was ignored. The `read()` method blocks until the synchronization variable has been written to, then returns the value. The `test()` method returns `true` if the synchronization variable has been written to, `false` otherwise.
 
 Example:
 
@@ -290,7 +294,9 @@ Example:
         } else if (pid > 0) {
           // parent process
           printf("%s\n", syncvar->read());
-          printf("%s\n", syncvar->read()); // Second call should match.
+          assert(syncvar->test());
+          // We can now read the value as often as we like.
+          assert(syncvar->read() == syncvar->read());
           waitpid(pid, NULL, 0); // wait for child to finish.
         } else {
           perror("fork()");
@@ -299,7 +305,7 @@ Example:
 
 # Event sets and polling <a name="eventsets"></a>
 
-For a number of important concurrency primitives, it is important to wait for one of out of a set of events to occur.
+For a number of important concurrency constructs, it is important to wait for one of out of a set of events to occur.
 
 Examples:
 
@@ -312,7 +318,7 @@ The following example illustrates the approach:
 
         enum Operation { HaveRead, HaveWritten };
 
-        Operation read_or_write(VRef<Queue<int> > out, VRef<Queue<int >> in,
+        Operation read_or_write(VRef<Queue<int> > out, VRef<Queue<int> > in,
                 int &data) {
           EventSet events;
           DequeueEvent<int> deq(in);
@@ -320,10 +326,10 @@ The following example illustrates the approach:
           events.add(deq);
           events.add(enq);
           switch (events.wait()) {
-            case 0: // recv
+            case 0: // dequeue
               data = deq.complete();
               return HaveRead;
-            case 1: // send
+            case 1: // enqueue
               enq.complete(data);
               return HaveWritten;
           }
