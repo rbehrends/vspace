@@ -60,6 +60,7 @@ int main() {
     // explicitly to test that explicit freeing works properly.
     outgoing.free();
     incoming.free();
+    vmem_deinit();
   } else {
     printf("fork() failed\n");
   }

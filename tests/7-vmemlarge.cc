@@ -13,5 +13,6 @@ int main() {
   for (int i = 0; i < n; i++)
     queue.dequeue().free();
   printf("%ld\n", vspace::internals::vmem.filesize());
+  vmem_deinit();
   return 0;
 }
