@@ -418,6 +418,12 @@ public:
   size_t offset() const {
     return vaddr;
   }
+  bool operator==(VRef<T> other) {
+    return vaddr == other.vaddr;
+  }
+  bool operator!=(VRef<T> other) {
+    return vaddr != other.vaddr;
+  }
   operator bool() const {
     return vaddr != internals::VADDR_NULL;
   }
@@ -481,6 +487,12 @@ public:
   }
   operator bool() const {
     return vaddr != internals::VADDR_NULL;
+  }
+  bool operator==(VRef<void> other) {
+    return vaddr == other.vaddr;
+  }
+  bool operator!=(VRef<void> other) {
+    return vaddr != other.vaddr;
   }
   bool is_null() {
     return vaddr == internals::VADDR_NULL;
@@ -563,6 +575,22 @@ template <typename T, typename Arg1, typename Arg2, typename Arg3>
 VRef<T> vnew(Arg1 arg1, Arg2 arg2, Arg3 arg3) {
   VRef<T> result = VRef<T>::alloc();
   new (result.to_ptr()) T(arg1, arg2, arg3);
+  return result;
+}
+
+template <typename T, typename Arg1, typename Arg2, typename Arg3,
+    typename Arg4>
+VRef<T> vnew(Arg1 arg1, Arg2 arg2, Arg3 arg3, Arg4 arg4) {
+  VRef<T> result = VRef<T>::alloc();
+  new (result.to_ptr()) T(arg1, arg2, arg3, arg4);
+  return result;
+}
+
+template <typename T, typename Arg1, typename Arg2, typename Arg3,
+    typename Arg4, typename Arg5>
+VRef<T> vnew(Arg1 arg1, Arg2 arg2, Arg3 arg3, Arg4 arg4, Arg5 arg5) {
+  VRef<T> result = VRef<T>::alloc();
+  new (result.to_ptr()) T(arg1, arg2, arg3, arg4, arg5);
   return result;
 }
 
