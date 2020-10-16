@@ -65,11 +65,11 @@ A simple example demonstrates how this works ([queues](#queue) and [virtual refe
         pid_t pid = fork_process();
         if (pid == 0) {
           // child process
-          queue.enqueue(314);
+          queue->enqueue(314);
           exit(0);
         } else if (pid > 0) {
           // parent process
-          assert(queue.dequeue() == 314);
+          assert(queue->dequeue() == 314);
           waitpid(pid, NULL, 0); // wait for child to finish.
         } else {
           perror("fork()");
@@ -177,6 +177,8 @@ For a `Queue<T>`, the `enqueue()` method takes an argument of type `T` and adds 
 
 The `dequeue()` method checks if the queue is empty. If it is empty, it will block until the queue contains at least one element. When it is not empty, it will remove the first element that was enqueued and return it. The `try_dequeue()` method is a non-blocking version that returns a `Result<T>` struct. This struct has a boolean member `ok` to signal if the dequeue operation succeeded and a `result` member that will contain the result if it was successful.
 
+Implementation detail: the type `T` must have a default and a copy constructor. If this is not possible, one can use a `Queue<VRef<T>>` instead to wrap the type.
+
 Example:
 
         VRef<Queue<int> > fifo = vnew<Queue<int> >(1);
@@ -191,4 +193,70 @@ Example:
 
 Note that processes can only send each other information that both understand. This can include pointers, but generally only if the pointers were visible to both processes before `fork_process()` was called.
 
+Example:
+
+        static const char *message = "Hello, parallel world!";
+        VRef<Queue<const char *> > queue = vnew<Queue<const char *> >();
+        pid_t pid = fork_process();
+        if (pid == 0) {
+          // child process
+          queue->enqueue(message);
+          exit(0);
+        } else if (pid > 0) {
+          // parent process
+          printf("%s\n", queue->dequeue());
+          waitpid(pid, NULL, 0); // wait for child to finish.
+        } else {
+          perror("fork()");
+          exit(1);
+        }
+
+The above works because in both child and parent process, `messaage` has the same address. We can similarly construct large read-only data structures prior to starting worker processes and have those data structures at the same address in all processes.
+
+If this is not possible, the data has to be packaged in a portable format (such as a struct or a `VRef<VString>`) so that both sending and receiving proces can use it.
+
 # Event sets and polling <a name="eventsets"></a>
+
+For a number of important concurrency primitives, it is important to wait for one of out of a set of events to occur.
+
+Examples:
+
+* A process reading from multiple queues and merging the results into a single output queue.
+* Multiple dependent processes trying alternative approaches submitted to them by a controller process through a bounded task queue. The controller needs to both wait for space to become available in the task queue and responses sent by the dependent processes.
+
+We handle this through event sets. An event set can contain one or more events and then wait for the first of them to complete. This is similar to how the POSIX primitives `select()` and `poll()` function.
+
+The following example illustrates the approach:
+
+        enum Operation { HaveRead, HaveWritten };
+
+        Operation read_or_write(VRef<Queue<int> > out, VRef<Queue<int >> in,
+                int &data) {
+          EventSet events;
+          DequeueEvent<int> deq(in);
+          EnqueueEvent<int> enq(out);
+          events.add(deq);
+          events.add(enq);
+          switch (events.wait()) {
+            case 0: // recv
+              data = deq.complete();
+              return HaveRead;
+            case 1: // send
+              enq.complete(data);
+              return HaveWritten;
+          }
+        }
+
+This function tries to either read an integer from `in` or write an integer to `out`, whichever queue becomes available first.
+
+We first declare an empty EventSet `events`.
+
+We then declare a receive event `deq` for `in` and a send event `enq` for `out`.
+
+Next, we call `events.wait()`. This will block until one of the events in the event set is ready. The return value of `events.wait()` is the number of the event in the order in which they were added to the event set, starting at 0. Thus, we get `0` if `deq` fired and `1` if it was `enq`.
+
+We next need to complete the event. The reason is that the underlying object may now be in locked state and we may need to read to or write from it before it can resume normal operation. Each event type therefore supports a `complete()` operation, but the argument and return types may vary. For `EnqueueEvent`, `complete()` takes an argument that will then be enqueued in the underlying queue. For `DequeueEvent`, `complete()` takes no argument, but returns the next element in the queue.
+
+The destructor of `EventSet` will finally do all the necessary cleanup when its scope exits.
+
+A third event currently supported is `WaitSemaphore`, which waits for the semaphore's value to become non-zero; the `complete()` function then corresponds to a `post()` operation on the semaphore.

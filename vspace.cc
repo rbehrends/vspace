@@ -502,7 +502,8 @@ bool Semaphore::start_wait(internals::ipc_signal_t sig) {
   return true;
 }
 
-void Semaphore::stop_wait() {
+bool Semaphore::stop_wait() {
+  bool result = false;
   _lock.lock();
   for (int i = _head; i != _tail; next(i)) {
     if (_waiting[i] == internals::vmem.current_process) {
@@ -515,10 +516,12 @@ void Semaphore::stop_wait() {
         next(i);
       }
       _tail = last;
+      result = true;
       break;
     }
   }
   _lock.unlock();
+  return result;
 }
 
 void EventSet::add(Event *event) {

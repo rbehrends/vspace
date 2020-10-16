@@ -34,8 +34,8 @@ int main() {
     bool sent_sentinel = false;
     for (;;) {
       EventSet events;
-      ReceiveQueue<VRef<long> > recv(incoming);
-      SendQueue<VRef<long> > send(outgoing);
+      DequeueEvent<VRef<long> > recv(incoming);
+      EnqueueEvent<VRef<long> > send(outgoing);
       events << recv;
       if (!sent_sentinel)
         events << send;

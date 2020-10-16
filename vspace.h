@@ -988,7 +988,90 @@ public:
   bool try_wait();
   void wait();
   bool start_wait(internals::ipc_signal_t sig = 0);
-  void stop_wait();
+  bool stop_wait();
+};
+
+template <typename T>
+class SyncVar {
+private:
+  FastLock _lock;
+  VRef<Semaphore> _sem;
+  bool _set;
+  size_t _waiting;
+  T _value;
+  template <typename U>
+  friend class SyncReadEvent;
+  bool start_wait(internals::ipc_signal_t sig) {
+    _lock.lock();
+    if (_set) {
+      internals::send_signal(internals::vmem.current_process, sig);
+      _lock.unlock();
+      return true;
+    }
+    _waiting++;
+    if (_sem.is_null()) {
+      _sem = vnew<Semaphore>();
+    }
+    bool result = _sem->start_wait(sig);
+    _lock.unlock();
+    return result;
+  }
+  void stop_wait() {
+    _lock.lock();
+    if (!_sem.is_null()) {
+      if (_sem->stop_wait()) {// were we still waiting
+        _waiting--;
+        _sem->post();
+      }
+    }
+    _lock.unlock();
+  }
+public:
+  SyncVar() : _set(false), _waiting(0) { }
+  T read() {
+    _lock.lock();
+    if (_set) {
+      _lock.unlock();
+      return _value;
+    }
+    _waiting++;
+    if (_sem.is_null()) {
+      _sem = vnew<Semaphore>();
+    }
+    _lock.unlock();
+    _sem->wait();
+    _lock.lock();
+    if (_waiting)
+      _sem->post();
+    else {
+      _sem.free();
+      _sem = vnull<Semaphore>();
+    }
+    _lock.unlock();
+    return _value;
+  }
+  Result<T> try_read() {
+    _lock.lock();
+    Result<T> result = _set ? Result<T>(_value) : Result<T>();
+    _lock.unlock();
+    return result;
+  }
+  bool write(T value) {
+    _lock.lock();
+    if (_set) {
+      _lock.unlock();
+      return false;
+    }
+    _set = true;
+    _value = value;
+    if (_waiting)
+      _sem->post();
+    _lock.unlock();
+    return true;
+  }
+  bool test() {
+    return _set;
+  }
 };
 
 template <typename T>
@@ -1022,9 +1105,9 @@ private:
     }
   }
   template <typename U>
-  friend class SendQueue;
+  friend class EnqueueEvent;
   template <typename U>
-  friend class ReceiveQueue;
+  friend class DequeueEvent;
 
   void enqueue_nowait(T item) {
     _lock.lock();
@@ -1115,12 +1198,12 @@ public:
   int wait();
 };
 
-class WaitSemaphore : public Event {
+class WaitSemaphoreEvent : public Event {
 private:
   VRef<Semaphore> _sem;
 
 public:
-  WaitSemaphore(VRef<Semaphore> sem) : _sem(sem) {
+  WaitSemaphoreEvent(VRef<Semaphore> sem) : _sem(sem) {
   }
   virtual bool start_listen(internals::ipc_signal_t sig) {
     return _sem->start_wait(sig);
@@ -1133,12 +1216,12 @@ public:
 };
 
 template <typename T>
-class SendQueue : public Event {
+class EnqueueEvent : public Event {
 private:
   VRef<Queue<T> > _queue;
 
 public:
-  SendQueue(VRef<Queue<T> > queue) : _queue(queue) {
+  EnqueueEvent(VRef<Queue<T> > queue) : _queue(queue) {
   }
   virtual bool start_listen(internals::ipc_signal_t sig) {
     return _queue->_outgoing.start_wait(sig);
@@ -1152,12 +1235,12 @@ public:
 };
 
 template <typename T>
-class ReceiveQueue : public Event {
+class DequeueEvent : public Event {
 private:
   VRef<Queue<T> > _queue;
 
 public:
-  ReceiveQueue(VRef<Queue<T> > queue) : _queue(queue) {
+  DequeueEvent(VRef<Queue<T> > queue) : _queue(queue) {
   }
   virtual bool start_listen(internals::ipc_signal_t sig) {
     return _queue->_incoming.start_wait(sig);
@@ -1167,6 +1250,25 @@ public:
   }
   T complete() {
     return _queue->dequeue_nowait();
+  }
+};
+
+template <typename T>
+class SyncReadEvent : public Event {
+private:
+  VRef<SyncVar<T> > _syncvar;
+
+public:
+  SyncReadEvent(VRef<SyncVar<T> > syncvar) : _syncvar(syncvar) {
+  }
+  virtual bool start_listen(internals::ipc_signal_t sig) {
+    return _syncvar->start_wait(sig);
+  }
+  virtual void stop_listen() {
+    _syncvar->stop_wait();
+  }
+  T complete() {
+    return _syncvar->read();
   }
 };
 
