@@ -976,6 +976,11 @@ private:
   }
   size_t _value;
   FastLock _lock;
+  bool _idle() {
+    return _head == _tail;
+  }
+  template <typename T>
+  friend class SyncVar;
 
 public:
   Semaphore(size_t value = 0) :
@@ -989,89 +994,6 @@ public:
   void wait();
   bool start_wait(internals::ipc_signal_t sig = 0);
   bool stop_wait();
-};
-
-template <typename T>
-class SyncVar {
-private:
-  FastLock _lock;
-  VRef<Semaphore> _sem;
-  bool _set;
-  size_t _waiting;
-  T _value;
-  template <typename U>
-  friend class SyncReadEvent;
-  bool start_wait(internals::ipc_signal_t sig) {
-    _lock.lock();
-    if (_set) {
-      internals::send_signal(internals::vmem.current_process, sig);
-      _lock.unlock();
-      return true;
-    }
-    _waiting++;
-    if (_sem.is_null()) {
-      _sem = vnew<Semaphore>();
-    }
-    bool result = _sem->start_wait(sig);
-    _lock.unlock();
-    return result;
-  }
-  void stop_wait() {
-    _lock.lock();
-    if (!_sem.is_null()) {
-      if (_sem->stop_wait()) {// were we still waiting
-        _waiting--;
-        _sem->post();
-      }
-    }
-    _lock.unlock();
-  }
-public:
-  SyncVar() : _set(false), _waiting(0) { }
-  T read() {
-    _lock.lock();
-    if (_set) {
-      _lock.unlock();
-      return _value;
-    }
-    _waiting++;
-    if (_sem.is_null()) {
-      _sem = vnew<Semaphore>();
-    }
-    _lock.unlock();
-    _sem->wait();
-    _lock.lock();
-    if (_waiting)
-      _sem->post();
-    else {
-      _sem.free();
-      _sem = vnull<Semaphore>();
-    }
-    _lock.unlock();
-    return _value;
-  }
-  Result<T> try_read() {
-    _lock.lock();
-    Result<T> result = _set ? Result<T>(_value) : Result<T>();
-    _lock.unlock();
-    return result;
-  }
-  bool write(T value) {
-    _lock.lock();
-    if (_set) {
-      _lock.unlock();
-      return false;
-    }
-    _set = true;
-    _value = value;
-    if (_waiting)
-      _sem->post();
-    _lock.unlock();
-    return true;
-  }
-  bool test() {
-    return _set;
-  }
 };
 
 template <typename T>
@@ -1162,6 +1084,108 @@ public:
       return Result<T>();
   }
 };
+
+template <typename T>
+class SyncVar {
+private:
+  FastLock _lock;
+  VRef<Semaphore> _sem;
+  bool _set;
+  T _value;
+  template <typename U>
+  friend class SyncReadEvent;
+  bool start_wait(internals::ipc_signal_t sig);
+  void stop_wait();
+public:
+  SyncVar() : _set(false) { }
+  T read();
+  Result<T> try_read();
+  bool write(T value);
+  bool test() {
+    return _set;
+  }
+};
+
+template <typename T>
+bool SyncVar<T>::start_wait(internals::ipc_signal_t sig) {
+  _lock.lock();
+  if (_set) {
+    internals::send_signal(internals::vmem.current_process, sig);
+    _lock.unlock();
+    return true;
+  }
+  if (_sem.is_null()) {
+    _sem = vnew<Semaphore>();
+  }
+  bool result = _sem->start_wait(sig);
+  _lock.unlock();
+  return result;
+}
+
+template <typename T>
+void SyncVar<T>::stop_wait() {
+  _lock.lock();
+  if (!_sem.is_null()) {
+    _sem->stop_wait();
+    if (!_sem->_idle())
+      _sem->post();
+  }
+  _lock.unlock();
+}
+
+template <typename T>
+T SyncVar<T>::read() {
+  _lock.lock();
+  if (_set) {
+    _lock.unlock();
+    return _value;
+  }
+  if (_sem.is_null()) {
+    _sem = vnew<Semaphore>();
+  }
+  // We can't wait inside the lock without deadlocking; but waiting outside
+  // could cause a race condition with _sem being freed due to being idle.
+  // Thus, we use start_wait() to insert ourselves into the queue, then
+  // use wait_signal() outside the lock to complete waiting.
+  //
+  // Note: start_wait() will not send a signal to self, as _set is
+  // false and therefore _sem->value() must be zero.
+  _sem->start_wait(0);
+  _lock.unlock();
+  internals::wait_signal();
+  _lock.lock();
+  if (_sem->_idle())
+    _sem->post();
+  else {
+    _sem.free();
+    _sem = vnull<Semaphore>();
+  }
+  _lock.unlock();
+  return _value;
+}
+
+template <typename T>
+Result<T> SyncVar<T>::try_read() {
+  _lock.lock();
+  Result<T> result = _set ? Result<T>(_value) : Result<T>();
+  _lock.unlock();
+  return result;
+}
+
+template <typename T>
+bool SyncVar<T>::write(T value) {
+  _lock.lock();
+  if (_set) {
+    _lock.unlock();
+    return false;
+  }
+  _set = true;
+  _value = value;
+  if (!_sem->_idle())
+    _sem->post();
+  _lock.unlock();
+  return true;
+}
 
 class Event {
 public:

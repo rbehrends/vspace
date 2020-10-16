@@ -12,7 +12,8 @@ VSPace is a C++ library for C++ 98 or later that supports high-level shared memo
 7. [Mutexes](#mutex)
 8. [Semaphores](#semaphore)
 9. [Queues](#queue)
-10. [Event sets and polling](#eventsets)
+10. [Synchronization variables](#syncvar)
+11. [Event sets and polling](#eventsets)
 
 # Overview <a name="overview"></a>
 
@@ -214,6 +215,10 @@ Example:
 The above works because in both child and parent process, `messaage` has the same address. We can similarly construct large read-only data structures prior to starting worker processes and have those data structures at the same address in all processes.
 
 If this is not possible, the data has to be packaged in a portable format (such as a struct or a `VRef<VString>`) so that both sending and receiving proces can use it.
+
+# Synchronization variables <a name="syncvar"></a>
+
+Synchronization variables are storage locations that can be written once, read multiple times, and where reads block until the synchronization variable has been written to for the first time. 
 
 # Event sets and polling <a name="eventsets"></a>
 
