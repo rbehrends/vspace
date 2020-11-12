@@ -62,7 +62,7 @@ Like `fork()`, `fork_process()` will return the pid of the child process in the 
 
 A simple example demonstrates how this works ([queues](#queue) and [virtual references](#vref) are documented below).
 
-        VRef<Queue<int> > queue = vnew<Queue<int> >(); // create a queue
+        VRef<Queue<int>> queue = vnew<Queue<int>>(); // create a queue
         pid_t pid = fork_process();
         if (pid == 0) {
           // child process
@@ -238,13 +238,13 @@ For a `Queue<T>` instance, the `enqueue()` method takes an argument of type `T` 
 
 The `dequeue()` method checks if the queue is empty. If it is empty, it will block until the queue contains at least one element. When it is not empty, it will remove the first element that was enqueued and return it. The `try_dequeue()` method is a non-blocking version that returns a `Result<T>` struct. This struct has a boolean member `ok` to signal if the dequeue operation succeeded and a `result` member that will contain the result if it was successful.
 
-Implementation detail: the type `T` must have a default and a copy constructor. If this is not possible, one can use a `Queue<VRef<T>>` instead to wrap the type.
+Implementation detail: the type parameter `T` must have default and copy constructors. If this is not possible, one can use a `Queue<VRef<T>>` instead to wrap the type.
 
 Example:
 
         // Create a bounded queue with a maximum capacity of one
         // element.
-        VRef<Queue<int> > fifo = vnew<Queue<int> >(1);
+        VRef<Queue<int>> fifo = vnew<Queue<int>>(1);
         fifo.enqueue(1);
         assert(!fifo.try_enqueue(2));
         assert(fifo.dequeue() == 1);
@@ -259,7 +259,7 @@ Note that processes can only send each other information that both understand. T
 Example:
 
         static const char *message = "Hello, parallel world!";
-        VRef<Queue<const char *> > queue = vnew<Queue<const char *> >();
+        VRef<Queue<const char *>> queue = vnew<Queue<const char *>>();
         pid_t pid = fork_process();
         if (pid == 0) {
           // child process
@@ -284,7 +284,7 @@ Synchronization variables are shared storage locations that can be written to on
 
 Example:
 
-        VRef<SyncVar<int> > syncvar = vnew<SyncVar<int> >();
+        VRef<SyncVar<int>> syncvar = vnew<SyncVar<int>>();
         pid_t pid = fork_process();
         if (pid == 0) {
           // child process
@@ -303,6 +303,8 @@ Example:
           exit(1);
         }
 
+As with queues, the type parameter `T` must have default and copy constructors.
+
 # Event sets and polling <a name="eventsets"></a>
 
 For a number of important concurrency constructs, it is important to wait for one of out of a set of events to occur.
@@ -318,7 +320,7 @@ The following example illustrates the approach:
 
         enum Operation { HaveRead, HaveWritten };
 
-        Operation read_or_write(VRef<Queue<int> > out, VRef<Queue<int> > in,
+        Operation read_or_write(VRef<Queue<int>> out, VRef<Queue<int>> in,
                 int &data) {
           EventSet events;
           DequeueEvent<int> deq(in);
