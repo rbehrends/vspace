@@ -739,6 +739,11 @@ public:
     memcpy(buffer, s, len);
     buffer[len] = '\0';
   }
+  VString(size_t len) {
+    _len = len;
+    _buffer = vnew_uninitialized_array<char>(len + 1);
+    _buffer[len] = '\0';
+  }
   ~VString() {
     _buffer.free();
   }
