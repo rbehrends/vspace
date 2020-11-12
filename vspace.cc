@@ -525,27 +525,25 @@ bool Semaphore::stop_wait() {
 }
 
 void EventSet::add(Event *event) {
-  if (_count == _cap) {
-    int newcap = _cap * 3 / 2 + 1;
-    Event **events = new Event *[newcap];
-    memcpy(events, _events, sizeof(Event *) * _count);
-    if (_events == _default_events)
-      delete _events;
-    _events = events;
+  event->_next = NULL;
+  if (_head == NULL) {
+    _head = _tail = event;
+  } else {
+    _tail->_next = event;
+    _tail = event;
   }
-  _events[_count++] = event;
 }
 
 int EventSet::wait() {
-  size_t n;
-  for (n = 0; n < _count; n++) {
-    if (!_events[n]->start_listen((int) n)) {
+  size_t n = 0;
+  for (Event *event = _head; event; event = event->_next) {
+    if (!event->start_listen((int) (n++))) {
       break;
     }
   }
   internals::ipc_signal_t result = internals::check_signal();
-  for (size_t i = 0; i < n; i++) {
-    _events[i]->stop_listen();
+  for (Event *event = _head; event; event = event->_next) {
+    event->stop_listen();
   }
   internals::accept_signals();
   return (int) result;

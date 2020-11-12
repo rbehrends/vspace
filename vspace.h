@@ -766,6 +766,11 @@ static inline VRef<VString> vstring(const char *s, size_t len) {
   return vnew<VString>(s, len);
 }
 
+static inline VRef<VString> vstring(size_t len) {
+  return vnew<VString>(len);
+}
+
+
 template <typename Spec>
 class VMap {
 private:
@@ -1223,6 +1228,9 @@ bool SyncVar<T>::write(T value) {
 }
 
 class Event {
+private:
+  Event *_next;
+  friend class EventSet;
 public:
   virtual bool start_listen(internals::ipc_signal_t sig) = 0;
   virtual void stop_listen() = 0;
@@ -1230,17 +1238,10 @@ public:
 
 class EventSet {
 private:
-  Event *_default_events[4];
-  Event **_events;
-  size_t _count;
-  size_t _cap;
+  Event *_head, *_tail;
 
 public:
-  EventSet() : _count(0), _cap(4), _events(_default_events) {
-  }
-  ~EventSet() {
-    if (_events != _default_events)
-      delete _events;
+  EventSet() : _head(NULL), _tail(NULL) {
   }
   void add(Event *event);
   void add(Event &event) {
