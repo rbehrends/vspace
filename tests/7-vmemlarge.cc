@@ -1,4 +1,4 @@
-#include "vspace.h"
+#include "test.h"
 
 using namespace vspace;
 
@@ -13,7 +13,7 @@ int main() {
     q->enqueue(vnew<int>(i));
   for (int i = 0; i < n; i++)
     q->dequeue().free();
-  printf("%ld\n", vspace::internals::vmem.filesize());
+  std::printf("%ld\n", vspace::internals::vmem.filesize());
   vmem_deinit();
   return 0;
 }

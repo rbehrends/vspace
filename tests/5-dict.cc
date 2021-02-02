@@ -1,4 +1,4 @@
-#include "vspace.h"
+#include "test.h"
 #include <sys/wait.h>
 
 typedef vspace::VRef<vspace::VString> VStr;
@@ -19,9 +19,9 @@ int main() {
   assert(dict->find(beta));
   assert(dict->find(gamma));
   assert(!dict->find(delta));
-  printf("%s\n", dict->find(alpha)->str());
-  printf("%s\n", dict->find(beta)->str());
-  printf("%s\n", dict->find(gamma)->str());
+  std::printf("%s\n", dict->find(alpha)->str());
+  std::printf("%s\n", dict->find(beta)->str());
+  std::printf("%s\n", dict->find(gamma)->str());
   const int n = 10000;
   VStr nstr[n];
   for (int i = 0; i < n; i++) {

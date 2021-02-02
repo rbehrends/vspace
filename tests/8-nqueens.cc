@@ -1,4 +1,4 @@
-#include "vspace.h"
+#include "test.h"
 #include <sys/wait.h>
 
 using namespace vspace;
@@ -107,8 +107,8 @@ int main() {
       result += d;
     }
   }
-  printf("%d\n", result);
-  fflush(stdout);
+  std::printf("%d\n", result);
+  std::fflush(stdout);
   for (int i = 0; i < nworkers; i++)
     waitpid(workers[i], NULL, 0);
   vmem_deinit();

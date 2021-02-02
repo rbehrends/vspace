@@ -1,4 +1,4 @@
-#include "vspace.h"
+#include "test.h"
 #include <sys/wait.h>
 
 int main() {
@@ -13,7 +13,7 @@ int main() {
   // interprocess communications.
   pid_t pid = fork_process();
   if (pid == 0) {
-    printf("child process started\n");
+    std::printf("child process started\n");
     long s = 0;
     for (;;) {
       VRef<long> msg = outgoing->dequeue();
@@ -23,11 +23,11 @@ int main() {
       if (d == 0)
         break;
     }
-    printf("C: %ld\n", s);
+    std::printf("C: %ld\n", s);
     incoming->enqueue(vnew<long>(s));
     exit(0);
   } else if (pid > 0) {
-    printf("parent process resumed\n");
+    std::printf("parent process resumed\n");
     for (int i = 1; i <= 200000; i++) {
       outgoing->enqueue(vnew<long>(i)); // write to queue.
     }
@@ -42,7 +42,7 @@ int main() {
       switch (events.wait()) {
         case 0: { // recv
           VRef<long> msg = recv.complete();
-          printf("P: %ld\n", *msg);
+          std::printf("P: %ld\n", *msg);
           msg.free();
           exit(0);
           break;
@@ -62,7 +62,7 @@ int main() {
     incoming.free();
     vmem_deinit();
   } else {
-    printf("fork() failed\n");
+    std::printf("fork() failed\n");
   }
   return 0;
 }

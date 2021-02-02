@@ -38,11 +38,12 @@ All public functionality is contained in the namespace `vspace`. Non-portable im
 The basic skeleton for a program using VSpace looks as follows:
 
         #include <vspace.h>
+        #include <cstdio>
         
         int main() {
           using namespace vspace;
           if (!vmem_init.ok()) {
-            printf("could not initialize vspace shared memory");
+            std::printf("could not initialize vspace shared memory");
             return 1; // error
           }
           // program body goes here.
@@ -95,7 +96,7 @@ New objects are created with the `vnew()` function instead of the `new` operator
 
         VRef<int> v = vnew<int>(0);
         *v = *v + 1;
-        printf("%d\n", *v);
+        std::printf("%d\n", *v);
         v.free();
 
 The `vnew()` function is more limited than the `new` operator in that it can currently only support a finite number of constructor arguments (at the moment, up to 3).
@@ -110,7 +111,7 @@ There are also `vnew_uninitialized()`, `vnew_array()`, and `vnew_uninitialized_a
         for (int i = 0; i < n; i++)
           s += v[i];
         v.free();
-        printf("%d\n", s);
+        std::printf("%d\n", s);
 
 Finally, the static `alloc()` method allows the allocation of raw virtual memory.
 
@@ -141,9 +142,9 @@ It is guaranteed that the strings returned by `str()` are null-terminated, thoug
         char abc[] = { 'a', 'b', 'c' };
         VRef<VString> beta = vstring(abc, sizeof(abc));
         // It is guaranteed that `abc` is null-terminated, thus using
-        // it for printf() is safe.
-        printf("%s %s\n", alpha->str(), abc->str());
-        printf("%d %d\n", (int) alpha->len(), (int) abc->len());
+        // it for std::printf() is safe.
+        std::printf("%s %s\n", alpha->str(), abc->str());
+        std::printf("%d %d\n", (int) alpha->len(), (int) abc->len());
 
 Shared strings also support a `clone()` method, which creates a copy of the string.
 
@@ -267,7 +268,7 @@ Example:
           exit(0);
         } else if (pid > 0) {
           // parent process
-          printf("%s\n", queue->dequeue());
+          std::printf("%s\n", queue->dequeue());
           waitpid(pid, NULL, 0); // wait for child to finish.
         } else {
           perror("fork()");
@@ -293,7 +294,7 @@ Example:
           exit(0);
         } else if (pid > 0) {
           // parent process
-          printf("%s\n", syncvar->read());
+          std::printf("%s\n", syncvar->read());
           assert(syncvar->test());
           // We can now read the value as often as we like.
           assert(syncvar->read() == syncvar->read());

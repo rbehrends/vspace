@@ -1,5 +1,6 @@
-#include "vspace.h"
+#include "test.h"
 #include <sys/wait.h>
+#include <unistd.h>
 
 int main() {
   using namespace vspace;
@@ -11,14 +12,14 @@ int main() {
   // interprocess communications.
   pid_t pid = fork_process();
   if (pid == 0) {
-    printf("child process started\n");
+    std::printf("child process started\n");
     sleep(1);
     VRef<VString> msg = vstring("Hello, world!");
     syncvar->write(msg);
     exit(0);
   } else if (pid > 0) {
-    printf("parent process resumed\n");
-    printf("%d: %s\n", (int) syncvar->read()->len(), syncvar->read()->str());
+    std::printf("parent process resumed\n");
+    std::printf("%d: %s\n", (int) syncvar->read()->len(), syncvar->read()->str());
     waitpid(pid, NULL, 0);  // wait for child to finish.
     // free memory; while memory will be discarded automatically when
     // the last process using the shared memory exits, we do it here
@@ -26,7 +27,7 @@ int main() {
     syncvar.free();
     vmem_deinit();
   } else {
-    printf("fork() failed\n");
+    std::printf("fork() failed\n");
   }
   return 0;
 }

@@ -1,4 +1,4 @@
-#include "vspace.h"
+#include "test.h"
 #include <sys/wait.h>
 
 int main() {
@@ -14,7 +14,7 @@ int main() {
   }
   for (int i = 0; i < n; i++) {
     vaddr_t a = vmem_alloc(10);
-    printf("%lu\n", a);
+    std::printf("%lu\n", a);
   }
   vspace::vmem_deinit();
   return 0;

@@ -1,5 +1,4 @@
-#include "vspace.h"
-#include <sys/wait.h>
+#include "test.h"
 
 int main() {
   using namespace vspace;
@@ -18,17 +17,17 @@ int main() {
   // interprocess communications.
   pid_t pid = fork_process();
   if (pid == 0) {
-    printf("child process started\n");
+    std::printf("child process started\n");
     sleep(1);
     sem->post(); // signal the semaphore
     VRef<VString> msg = vstring("Hello, world!");
     queue->enqueue(msg); // write to queue.
     exit(0);
   } else if (pid > 0) {
-    printf("parent process resumed\n");
+    std::printf("parent process resumed\n");
     sem->wait(); // wait for semaphore
     VRef<VString> msg = queue->dequeue(); // blocking read from queue
-    printf("%d: %s\n", (int) msg->len(), msg->str());
+    std::printf("%d: %s\n", (int) msg->len(), msg->str());
     waitpid(pid, NULL, 0);  // wait for child to finish.
     // free memory; while memory will be discarded automatically when
     // the last process using the shared memory exits, we do it here
@@ -39,7 +38,7 @@ int main() {
     mutex.free();
     vmem_deinit();
   } else {
-    printf("fork() failed\n");
+    std::printf("fork() failed\n");
   }
   return 0;
 }

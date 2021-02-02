@@ -1,11 +1,6 @@
 #include <fcntl.h>
-#include <stddef.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <unistd.h>
+#include <cstdio>
+#include <cstring>
 #include <assert.h>
 #include <new> // for placement new
 
@@ -247,7 +242,7 @@ struct VMem {
   static VMem vmem_global;
   MetaPage *metapage;
   int fd;
-  FILE *file_handle;
+  std::FILE *file_handle;
   int current_process; // index into process table
   vaddr_t *freelist; // reference to metapage information
   VSeg segments[MAX_SEGMENTS];
@@ -728,15 +723,15 @@ private:
 
 public:
   VString(const char *s) {
-    _len = strlen(s);
+    _len = std::strlen(s);
     _buffer = vnew_uninitialized_array<char>(_len + 1);
-    strcpy(_buffer.as_ptr(), s);
+    std::strcpy(_buffer.as_ptr(), s);
   }
   VString(const char *s, size_t len) {
     _len = len;
     _buffer = vnew_uninitialized_array<char>(len + 1);
     char *buffer = _buffer.as_ptr();
-    memcpy(buffer, s, len);
+    std::memcpy(buffer, s, len);
     buffer[len] = '\0';
   }
   VString(size_t len) {
