@@ -11,7 +11,7 @@
 #undef HAVE_CPP_THREADS
 #endif
 
-// vspace is a C++ library designed to allow processes in a
+// VSpace is a C++ library designed to allow processes in a
 // multi-process environment to interoperate via mmapped shared memory.
 // The library provides facilities for shared memory allocation and
 // deallocation, shared mutexes, semaphores, queues, lists, and hash
