@@ -222,6 +222,9 @@ struct Block {
 
 struct VSeg {
   unsigned char *base;
+  inline bool is_free() {
+    return base == NULL;
+  }
   inline Block *block_ptr(segaddr_t addr) {
     return (Block *) (base + addr);
   }
@@ -268,9 +271,8 @@ struct VMem {
   }
   inline void ensure_is_mapped(vaddr_t vaddr) {
     int seg = vaddr >> LOG2_SEGMENT_SIZE;
-    if (segments[seg].base != NULL)
-      return;
-    segments[seg] = mmap_segment(seg);
+    if (segments[seg].is_free())
+      segments[seg] = mmap_segment(seg);
   }
   inline void *to_ptr(vaddr_t vaddr) {
     if (vaddr == VADDR_NULL)

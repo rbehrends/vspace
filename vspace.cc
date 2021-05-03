@@ -85,8 +85,9 @@ void VMem::deinit() {
   current_process = -1;
   freelist = NULL;
   for (int i = 0; i < MAX_SEGMENTS; i++) {
-    munmap(segments[i].base, SEGMENT_SIZE);
-    segments[i] = NULL;
+    if (!segments[i].is_free())
+      munmap(segments[i].base, SEGMENT_SIZE);
+    segments[i] = VSeg(NULL);
   }
   for (int i = 0; i < MAX_PROCESS; i++) {
     close(channels[i].fd_read);
