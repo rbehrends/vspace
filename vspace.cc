@@ -588,6 +588,7 @@ pid_t fork_process() {
       pid_t pid = fork();
       if (pid < 0) {
         // error
+        unlock_metapage();
         return -1;
       } else if (pid == 0) {
         // child process
