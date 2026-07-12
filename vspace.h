@@ -356,9 +356,9 @@ void vmem_free(vaddr_t vaddr);
 vaddr_t vmem_alloc(size_t size);
 
 static inline vaddr_t allocated_ptr_to_vaddr(void *ptr) {
-  char *addr = (char *) ptr - sizeof(Block);
+  char *addr = (char *) ptr - offsetof(Block, data);
   vaddr_t info = ((Block *) addr)->prev;
-  int seg = info & (MAX_SEGMENTS - 1);
+  size_t seg = (info >> 2) & (MAX_SEGMENTS - 1);
   unsigned char *segstart = vmem.segments[seg].base;
   size_t offset = (unsigned char *) ptr - segstart;
   return (seg << LOG2_SEGMENT_SIZE) | offset;
