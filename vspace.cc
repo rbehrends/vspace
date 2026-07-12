@@ -9,6 +9,22 @@
 #endif
 
 namespace vspace {
+
+static AllocationFailureHandler allocation_failure_handler = NULL;
+
+void set_allocation_failure_handler(AllocationFailureHandler handler) {
+  allocation_failure_handler = handler;
+}
+
+static void allocation_failure(size_t size) {
+  if (allocation_failure_handler != NULL)
+    allocation_failure_handler(size);
+  else
+    std::fprintf(stderr, "vspace: unable to allocate %lu bytes\n",
+        (unsigned long) size);
+  std::abort();
+}
+
 namespace internals {
 
 size_t config[4]
@@ -244,25 +260,33 @@ void vmem_free(vaddr_t vaddr) {
 }
 
 vaddr_t vmem_alloc(size_t size) {
-  lock_allocator();
-  size_t alloc_size = size + offsetof(Block, data);
+  const size_t overhead = offsetof(Block, data);
+  if (size > SEGMENT_SIZE - overhead)
+    allocation_failure(size);
+
+  size_t alloc_size = size + overhead;
   int level = find_level(alloc_size);
+  lock_allocator();
   int flevel = level;
   while (flevel < LOG2_SEGMENT_SIZE && vmem.freelist[flevel] == VADDR_NULL)
     flevel++;
   if (vmem.freelist[flevel] == VADDR_NULL) {
+    if (vmem.metapage->segment_count >= (int) MAX_SEGMENTS) {
+      unlock_allocator();
+      allocation_failure(size);
+    }
     vmem.add_segment();
   }
   vmem.ensure_is_mapped(vmem.freelist[flevel]);
   while (flevel > level) {
     // get and split a block
     vaddr_t blockaddr = vmem.freelist[flevel];
-    assert((blockaddr & ((1 << flevel) - 1)) == 0);
+    assert((blockaddr & ((size_t(1) << flevel) - 1)) == 0);
     Block *block = vmem.block_ptr(blockaddr);
     vmem.freelist[flevel] = block->next;
     if (vmem.freelist[flevel] != VADDR_NULL)
       vmem.block_ptr(vmem.freelist[flevel])->prev = VADDR_NULL;
-    vaddr_t blockaddr2 = blockaddr + (1 << (flevel - 1));
+    vaddr_t blockaddr2 = blockaddr + (size_t(1) << (flevel - 1));
     Block *block2 = vmem.block_ptr(blockaddr2);
     flevel--;
     block2->next = vmem.freelist[flevel];

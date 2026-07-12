@@ -52,6 +52,10 @@ private:
   }
 };
 
+typedef void (*AllocationFailureHandler)(size_t size);
+
+void set_allocation_failure_handler(AllocationFailureHandler handler);
+
 struct Status {
   ErrCode err;
   bool ok() {
@@ -77,8 +81,8 @@ static const int MAX_PROCESS = 64;
 static const size_t METABLOCK_SIZE = 128 * 1024; // 128 KB
 static const int LOG2_SEGMENT_SIZE = 28; // 256 MB
 static const int LOG2_MAX_SEGMENTS = 10; // 256 GB
-static const size_t MAX_SEGMENTS = 1 << LOG2_MAX_SEGMENTS;
-static const size_t SEGMENT_SIZE = 1 << LOG2_SEGMENT_SIZE;
+static const size_t MAX_SEGMENTS = size_t(1) << LOG2_MAX_SEGMENTS;
+static const size_t SEGMENT_SIZE = size_t(1) << LOG2_SEGMENT_SIZE;
 static const size_t SEGMENT_MASK = (SEGMENT_SIZE - 1);
 
 // This is a very basic spinlock implementation that does not guarantee
@@ -337,15 +341,15 @@ struct refcount_t {
 
 static inline int find_level(size_t size) {
   int level = 0;
-  while ((1 << (level + 8)) <= size)
+  while ((size_t(1) << (level + 8)) <= size)
     level += 8;
-  while ((1 << level) < size)
+  while ((size_t(1) << level) < size)
     level++;
   return level;
 }
 
 static inline segaddr_t find_buddy(segaddr_t addr, int level) {
-  return addr ^ (1 << level);
+  return addr ^ (size_t(1) << level);
 }
 
 void vmem_free(vaddr_t vaddr);
