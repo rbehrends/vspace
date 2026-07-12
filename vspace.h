@@ -197,7 +197,13 @@ struct Block {
   // log2 of the block size (level). This requires LOG2_MAX_SEGMENTS +
   // log2(sizeof(vaddr_t) * 8) + 2 bits.
   //
-  // For free blocks, the level is stored in the data field.
+  // For free blocks, the level is stored in the data field, and prev and
+  // next link the block into its free list.
+  //
+  // For allocated blocks, next stores the number of bytes occupied by
+  // constructed objects. A value of zero denotes raw storage whose
+  // destruction is the caller's responsibility. The vnew helpers set this
+  // value after construction; vmem_alloc and VRef::alloc leave it at zero.
   vaddr_t prev;
   vaddr_t next;
   size_t data[1];
@@ -221,6 +227,14 @@ struct Block {
   }
   void mark_as_free(int level) {
     data[0] = level;
+  }
+  size_t constructed_size() {
+    assert(!is_free());
+    return next;
+  }
+  void mark_as_constructed(size_t size) {
+    assert(!is_free());
+    next = size;
   }
 };
 
@@ -356,6 +370,18 @@ void vmem_free(vaddr_t vaddr);
 vaddr_t vmem_alloc(size_t size);
 char *validate_allocator();
 
+static inline Block *allocated_block(vaddr_t vaddr) {
+  return vmem.block_ptr(vaddr - offsetof(Block, data));
+}
+
+static inline size_t constructed_size(vaddr_t vaddr) {
+  return allocated_block(vaddr)->constructed_size();
+}
+
+static inline void mark_as_constructed(vaddr_t vaddr, size_t size) {
+  allocated_block(vaddr)->mark_as_constructed(size);
+}
+
 static inline vaddr_t allocated_ptr_to_vaddr(void *ptr) {
   char *addr = (char *) ptr - offsetof(Block, data);
   vaddr_t info = ((Block *) addr)->prev;
@@ -465,7 +491,10 @@ public:
     return VRef<T>(internals::vmem_alloc(n * sizeof(T)));
   }
   void free() {
-    as_ptr()->~T(); // explicitly call destructor
+    T *ptr = as_ptr();
+    size_t count = internals::constructed_size(vaddr) / sizeof(T);
+    while (count > 0)
+      ptr[--count].~T();
     internals::vmem_free(vaddr);
     vaddr = internals::VADDR_NULL;
   }
@@ -534,6 +563,7 @@ template <typename T>
 VRef<T> vnew() {
   VRef<T> result = VRef<T>::alloc();
   new (result.to_ptr()) T();
+  internals::mark_as_constructed(result.offset(), sizeof(T));
   return result;
 }
 
@@ -550,6 +580,7 @@ VRef<T> vnew_array(size_t n) {
   for (size_t i = 0; i < n; i++) {
     new (ptr + i) T();
   }
+  internals::mark_as_constructed(result.offset(), n * sizeof(T));
   return result;
 }
 
@@ -563,6 +594,7 @@ template <typename T, typename Arg>
 VRef<T> vnew(Arg arg) {
   VRef<T> result = VRef<T>::alloc();
   new (result.to_ptr()) T(arg);
+  internals::mark_as_constructed(result.offset(), sizeof(T));
   return result;
 }
 
@@ -570,6 +602,7 @@ template <typename T, typename Arg1, typename Arg2>
 VRef<T> vnew(Arg1 arg1, Arg2 arg2) {
   VRef<T> result = VRef<T>::alloc();
   new (result.to_ptr()) T(arg1, arg2);
+  internals::mark_as_constructed(result.offset(), sizeof(T));
   return result;
 }
 
@@ -577,6 +610,7 @@ template <typename T, typename Arg1, typename Arg2, typename Arg3>
 VRef<T> vnew(Arg1 arg1, Arg2 arg2, Arg3 arg3) {
   VRef<T> result = VRef<T>::alloc();
   new (result.to_ptr()) T(arg1, arg2, arg3);
+  internals::mark_as_constructed(result.offset(), sizeof(T));
   return result;
 }
 
@@ -585,6 +619,7 @@ template <typename T, typename Arg1, typename Arg2, typename Arg3,
 VRef<T> vnew(Arg1 arg1, Arg2 arg2, Arg3 arg3, Arg4 arg4) {
   VRef<T> result = VRef<T>::alloc();
   new (result.to_ptr()) T(arg1, arg2, arg3, arg4);
+  internals::mark_as_constructed(result.offset(), sizeof(T));
   return result;
 }
 
@@ -593,6 +628,7 @@ template <typename T, typename Arg1, typename Arg2, typename Arg3,
 VRef<T> vnew(Arg1 arg1, Arg2 arg2, Arg3 arg3, Arg4 arg4, Arg5 arg5) {
   VRef<T> result = VRef<T>::alloc();
   new (result.to_ptr()) T(arg1, arg2, arg3, arg4, arg5);
+  internals::mark_as_constructed(result.offset(), sizeof(T));
   return result;
 }
 
