@@ -1191,7 +1191,7 @@ T SyncVar<T>::read() {
   _lock.unlock();
   internals::wait_signal();
   _lock.lock();
-  if (_sem->_idle())
+  if (!_sem->_idle())
     _sem->post();
   else {
     _sem.free();
@@ -1218,7 +1218,7 @@ bool SyncVar<T>::write(T value) {
   }
   _set = true;
   _value = value;
-  if (!_sem->_idle())
+  if (!_sem.is_null() && !_sem->_idle())
     _sem->post();
   _lock.unlock();
   return true;
