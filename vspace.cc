@@ -39,6 +39,22 @@ VMem VMem::vmem_global;
 #define metapageaddr(field) \
   ((char *) &vmem.metapage->field - (char *) vmem.metapage)
 
+static void release_process_slot() {
+  if (vmem.metapage == NULL || vmem.current_process < 0)
+    return;
+  lock_metapage();
+  ProcessInfo &info = vmem.metapage->process_info[vmem.current_process];
+  if (info.pid == getpid()) {
+    info.pid = 0;
+    info.sigstate = Waiting;
+    info.signal = 0;
+#ifdef HAVE_CPP_THREADS
+    info.next = -1;
+#endif
+  }
+  unlock_metapage();
+}
+
 size_t VMem::filesize() {
   struct stat stat;
   fstat(fd, &stat);
@@ -91,6 +107,7 @@ Status VMem::init(const char *path) {
 }
 
 void VMem::deinit() {
+  release_process_slot();
   if (file_handle) {
     fclose(file_handle);
     file_handle = NULL;
@@ -577,8 +594,15 @@ pid_t fork_process() {
         int parent = vmem.current_process;
         vmem.current_process = p;
         lock_metapage();
-        vmem.metapage->process_info[p].pid = getpid();
+        ProcessInfo &info = vmem.metapage->process_info[p];
+        info.pid = getpid();
+        info.sigstate = Waiting;
+        info.signal = 0;
+#ifdef HAVE_CPP_THREADS
+        info.next = -1;
+#endif
         unlock_metapage();
+        std::atexit(release_process_slot);
         send_signal(parent);
       } else {
         // parent process
