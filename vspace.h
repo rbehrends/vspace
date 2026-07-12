@@ -915,6 +915,7 @@ bool VMap<Spec>::remove(VRef<K> key, VRef<K> &oldkey, VRef<V> &oldvalue) {
       } else {
         last->next = node_ptr->next;
       }
+      node.free();
       _unlock_bucket(b);
       return true;
     }
