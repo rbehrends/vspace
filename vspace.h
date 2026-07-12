@@ -638,18 +638,47 @@ private:
   struct RefCounted {
     internals::refcount_t rc;
 #if __cplusplus >= 201100
-    alignas(T)
+    alignas(T) char data[sizeof(T)];
+#else
+    union Storage {
+      long double long_double_alignment;
+      void *pointer_alignment;
+      void (*function_pointer_alignment)();
+      char data[sizeof(T)];
+    } storage;
 #endif
-        char data[sizeof(T)];
     RefCounted() : rc(1) {
+    }
+    char *data_ptr() {
+#if __cplusplus >= 201100
+      return data;
+#else
+      return storage.data;
+#endif
     }
   };
   internals::vaddr_t vaddr;
-  internals::refcount_t &refcount() {
-    return ((RefCounted *) (internals::vmem.to_ptr(vaddr)))->rc;
+  static size_t data_offset() {
+    RefCounted layout;
+    return layout.data_ptr() - (char *) &layout;
   }
-  void *to_ptr() {
-    return &(((RefCounted *) (internals::vmem.to_ptr(vaddr)))->data);
+  RefCounted *refcounted() const {
+    return (RefCounted *) internals::vmem.to_ptr(vaddr);
+  }
+  internals::refcount_t &refcount() const {
+    return refcounted()->rc;
+  }
+  void *to_ptr() const {
+    return refcounted()->data_ptr();
+  }
+  void destroy() {
+    T *ptr = as_ptr();
+    size_t count = internals::constructed_size(vaddr) / sizeof(T);
+    while (count > 0)
+      ptr[--count].~T();
+    refcounted()->~RefCounted();
+    internals::vmem_free(vaddr);
+    vaddr = internals::VADDR_NULL;
   }
 
 public:
@@ -657,14 +686,20 @@ public:
   }
   ZRef(internals::vaddr_t vaddr) : vaddr(vaddr) {
   }
-  operator bool() {
+  operator bool() const {
     return vaddr != internals::VADDR_NULL;
   }
-  bool is_null() {
+  bool is_null() const {
     return vaddr == internals::VADDR_NULL;
   }
+  size_t offset() const {
+    return vaddr;
+  }
   ZRef(void *ptr) {
-    vaddr = internals::allocated_ptr_to_vaddr(ptr);
+    if (ptr == NULL)
+      vaddr = internals::VADDR_NULL;
+    else
+      vaddr = internals::allocated_ptr_to_vaddr((char *) ptr - data_offset());
   }
   T *as_ptr() const {
     return (T *) to_ptr();
@@ -675,11 +710,12 @@ public:
   T &operator*() const {
     return *(T *) to_ptr();
   }
-  T *operator->() {
+  T *operator->() const {
     return (T *) to_ptr();
   }
   ZRef<T> &operator=(ZRef<T> other) {
     vaddr = other.vaddr;
+    return *this;
   }
   template <typename U>
   ZRef<U> cast() const {
@@ -689,18 +725,19 @@ public:
     refcount().inc(vaddr);
   }
   void release() {
-    if (refcount().dec(vaddr) == 0) {
-      as_ref().~T();
-      internals::vmem_free(vaddr);
-    }
+    if (refcount().dec(vaddr) == 0)
+      destroy();
   }
   void free() {
-    as_ptr()->~T(); // explicitly call destructor
-    internals::vmem_free(vaddr);
-    vaddr = internals::VADDR_NULL;
+    destroy();
   }
-  static internals::vaddr_t alloc() {
-    return internals::vmem_alloc(sizeof(RefCounted));
+  static ZRef<T> alloc(size_t n = 1) {
+    size_t size = data_offset() + n * sizeof(T);
+    if (size < sizeof(RefCounted))
+      size = sizeof(RefCounted);
+    internals::vaddr_t vaddr = internals::vmem_alloc(size);
+    new (internals::vmem.to_ptr(vaddr)) RefCounted();
+    return ZRef<T>(vaddr);
   }
 };
 
@@ -712,50 +749,53 @@ ZRef<T> znull() {
 template <typename T>
 ZRef<T> znew() {
   ZRef<T> result = ZRef<T>::alloc();
-  new (result.to_ptr()) T();
+  new (result.as_ptr()) T();
+  internals::mark_as_constructed(result.offset(), sizeof(T));
   return result;
 }
 
 template <typename T>
 ZRef<T> znew_uninitialized() {
-  ZRef<T> result = ZRef<T>::alloc();
-  return result;
+  return ZRef<T>::alloc();
 }
 
 template <typename T>
 ZRef<T> znew_array(size_t n) {
-  ZRef<T> result = ZRef<T>::alloc();
+  ZRef<T> result = ZRef<T>::alloc(n);
   T *ptr = result.as_ptr();
   for (size_t i = 0; i < n; i++) {
     new (ptr + i) T();
   }
+  internals::mark_as_constructed(result.offset(), n * sizeof(T));
   return result;
 }
 
 template <typename T>
 ZRef<T> znew_uninitialized_array(size_t n) {
-  ZRef<T> result = ZRef<T>::alloc();
-  return result;
+  return ZRef<T>::alloc(n);
 }
 
 template <typename T, typename Arg>
 ZRef<T> znew(Arg arg) {
   ZRef<T> result = ZRef<T>::alloc();
-  new (result.to_ptr()) T(arg);
+  new (result.as_ptr()) T(arg);
+  internals::mark_as_constructed(result.offset(), sizeof(T));
   return result;
 }
 
 template <typename T, typename Arg1, typename Arg2>
 ZRef<T> znew(Arg1 arg1, Arg2 arg2) {
   ZRef<T> result = ZRef<T>::alloc();
-  new (result.to_ptr()) T(arg1, arg2);
+  new (result.as_ptr()) T(arg1, arg2);
+  internals::mark_as_constructed(result.offset(), sizeof(T));
   return result;
 }
 
 template <typename T, typename Arg1, typename Arg2, typename Arg3>
 ZRef<T> znew(Arg1 arg1, Arg2 arg2, Arg3 arg3) {
   ZRef<T> result = ZRef<T>::alloc();
-  new (result.to_ptr()) T(arg1, arg2, arg3);
+  new (result.as_ptr()) T(arg1, arg2, arg3);
+  internals::mark_as_constructed(result.offset(), sizeof(T));
   return result;
 }
 
