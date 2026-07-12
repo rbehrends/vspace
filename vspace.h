@@ -354,6 +354,7 @@ static inline segaddr_t find_buddy(segaddr_t addr, int level) {
 
 void vmem_free(vaddr_t vaddr);
 vaddr_t vmem_alloc(size_t size);
+char *validate_allocator();
 
 static inline vaddr_t allocated_ptr_to_vaddr(void *ptr) {
   char *addr = (char *) ptr - offsetof(Block, data);

@@ -1,5 +1,6 @@
 #include "vspace.h"
 #include <cstdlib>
+#include <set>
 #include <unistd.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -133,6 +134,7 @@ void VMem::add_segment() {
   Block *top = block_ptr(seg * SEGMENT_SIZE);
   top->next = freelist[LOG2_SEGMENT_SIZE];
   top->prev = VADDR_NULL;
+  top->mark_as_free(LOG2_SEGMENT_SIZE);
   freelist[LOG2_SEGMENT_SIZE] = seg * SEGMENT_SIZE;
 }
 
@@ -181,6 +183,122 @@ static void lock_allocator() {
 
 static void unlock_allocator() {
   vmem.metapage->allocator_lock.unlock();
+}
+
+char *validate_allocator() {
+  static char error[256];
+  std::set<vaddr_t> listed_free;
+  std::set<vaddr_t> physical_free;
+  struct AllocatorLockGuard {
+    AllocatorLockGuard() { lock_allocator(); }
+    ~AllocatorLockGuard() { unlock_allocator(); }
+  } lock_guard;
+
+  for (int level = 0; level <= LOG2_SEGMENT_SIZE; level++) {
+    vaddr_t previous = VADDR_NULL;
+    for (vaddr_t current = vmem.freelist[level]; current != VADDR_NULL;) {
+      size_t segno = vmem.segment_no(current);
+      segaddr_t addr = vmem.segaddr(current);
+      if (segno >= (size_t) vmem.metapage->segment_count) {
+        std::snprintf(error, sizeof(error),
+                    "free-list level %d contains block %lu in nonexistent segment %lu",
+                    level, (unsigned long) current, (unsigned long) segno);
+        return error;
+      }
+      if ((addr & ((size_t(1) << level) - 1)) != 0) {
+        std::snprintf(error, sizeof(error),
+                    "free-list block %lu is not aligned for level %d",
+            (unsigned long) current, level);
+        return error;
+      }
+      if (!listed_free.insert(current).second) {
+        std::snprintf(error, sizeof(error),
+                    "free-list block %lu occurs more than once",
+            (unsigned long) current);
+        return error;
+      }
+      vmem.ensure_is_mapped(current);
+      Block *block = vmem.block_ptr(current);
+      if (!block->is_free()) {
+        std::snprintf(error, sizeof(error),
+                    "free-list level %d contains allocated block %lu",
+            level, (unsigned long) current);
+        return error;
+      }
+      if (block->level() != level) {
+        std::snprintf(error, sizeof(error),
+                    "free-list block %lu records level %d instead of %d",
+            (unsigned long) current, block->level(), level);
+        return error;
+      }
+      if (block->prev != previous) {
+        std::snprintf(error, sizeof(error),
+                    "free-list block %lu has previous link %lu instead of %lu",
+            (unsigned long) current, (unsigned long) block->prev,
+            (unsigned long) previous);
+        return error;
+      }
+      previous = current;
+      current = block->next;
+    }
+  }
+
+  const int minimum_level = find_level(sizeof(Block));
+  for (int seg = 0; seg < vmem.metapage->segment_count; seg++) {
+    vaddr_t segment_start = vmem.vaddr(seg, 0);
+    vmem.ensure_is_mapped(segment_start);
+    for (segaddr_t addr = 0; addr < SEGMENT_SIZE;) {
+      Block *block = vmem.segments[seg].block_ptr(addr);
+      int level = block->level();
+      if (level < minimum_level || level > LOG2_SEGMENT_SIZE) {
+        std::snprintf(error, sizeof(error),
+                    "block %lu records invalid level %d",
+            (unsigned long) vmem.vaddr(seg, addr), level);
+        return error;
+      }
+      if ((addr & ((size_t(1) << level) - 1)) != 0) {
+        std::snprintf(error, sizeof(error),
+                    "block %lu is not aligned for level %d",
+            (unsigned long) vmem.vaddr(seg, addr), level);
+        return error;
+      }
+      if ((size_t(1) << level) > SEGMENT_SIZE - addr) {
+        std::snprintf(error, sizeof(error),
+                    "block %lu at level %d extends beyond its segment",
+            (unsigned long) vmem.vaddr(seg, addr), level);
+        return error;
+      }
+      if (block->is_free())
+        physical_free.insert(vmem.vaddr(seg, addr));
+      addr += size_t(1) << level;
+    }
+  }
+
+  if (listed_free != physical_free) {
+    std::snprintf(error, sizeof(error),
+            "physical free blocks do not match free lists (%lu physical, %lu listed)",
+        (unsigned long) physical_free.size(), (unsigned long) listed_free.size());
+    return error;
+  }
+
+  for (std::set<vaddr_t>::const_iterator i = physical_free.begin();
+      i != physical_free.end(); ++i) {
+    Block *block = vmem.block_ptr(*i);
+    int level = block->level();
+    if (level < LOG2_SEGMENT_SIZE) {
+      vaddr_t buddy = vmem.vaddr(vmem.segment_no(*i),
+          find_buddy(vmem.segaddr(*i), level));
+      if (physical_free.find(buddy) != physical_free.end()
+          && vmem.block_ptr(buddy)->level() == level) {
+        std::snprintf(error, sizeof(error),
+                    "free buddy blocks %lu and %lu at level %d were not coalesced",
+            (unsigned long) *i, (unsigned long) buddy, level);
+        return error;
+      }
+    }
+  }
+
+  return NULL;
 }
 
 static void print_freelists() {
@@ -293,7 +411,8 @@ vaddr_t vmem_alloc(size_t size) {
     block2->prev = blockaddr;
     block->next = blockaddr2;
     block->prev = VADDR_NULL;
-    // block->prev == VADDR_NULL already.
+    block->mark_as_free(flevel);
+    block2->mark_as_free(flevel);
     vmem.freelist[flevel] = blockaddr;
   }
   assert(vmem.freelist[level] != VADDR_NULL);
