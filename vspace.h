@@ -864,7 +864,6 @@ bool VMap<Spec>::add(VRef<K> key, VRef<V> value, VRef<K> &oldkey,
     Node *node_ptr = node.as_ptr();
     if (hash == node_ptr->hash
         && Spec::equal(key.as_ptr(), node_ptr->key.as_ptr())) {
-      value = node_ptr->value;
       if (!last.is_null()) {
         // move to front
         last->next = node_ptr->next;

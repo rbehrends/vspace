@@ -60,8 +60,11 @@ int main() {
   assert(dict->find(gamma));
   assert(dict->add(delta, delta->clone()));
   VStr k, v;
-  assert(!dict->add(delta, alpha, k, v));
+  VStr replacement = alpha->clone();
+  assert(!dict->add(delta, replacement, k, v));
   assert(DictSpec::equal(v.as_ptr(), delta.as_ptr()));
+  assert(dict->find(delta) == replacement);
+  v.free();
   dict.free();
   vmem_deinit();
   return 0;
