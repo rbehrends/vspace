@@ -137,7 +137,7 @@ void unlock_file(int fd, size_t offset, size_t len = 1);
 
 void lock_metapage();
 void unlock_metapage();
-void init_metapage(bool create);
+Status init_metapage(bool create);
 
 typedef int ipc_signal_t;
 

@@ -62,33 +62,56 @@ size_t VMem::filesize() {
 }
 
 Status VMem::init(int fd) {
+  struct stat stat;
+  if (fstat(fd, &stat) < 0)
+    return Status(ErrOS);
+
   this->fd = fd;
+  file_handle = NULL;
+  current_process = -1;
+  metapage = NULL;
+  freelist = NULL;
   for (int i = 0; i < MAX_SEGMENTS; i++)
     segments[i] = VSeg(NULL);
-  for (int i = 0; i < MAX_PROCESS; i++) {
+  int channel_count = 0;
+  for (; channel_count < MAX_PROCESS; channel_count++) {
     int channel[2];
-    if (pipe(channel) < 0) {
-      for (int j = 0; j < i; j++) {
-        close(channels[j].fd_read);
-        close(channels[j].fd_write);
-      }
-      return Status(ErrOS);
-    }
-    channels[i].fd_read = channel[0];
-    channels[i].fd_write = channel[1];
+    if (pipe(channel) < 0)
+      break;
+    channels[channel_count].fd_read = channel[0];
+    channels[channel_count].fd_write = channel[1];
   }
+  if (channel_count != MAX_PROCESS) {
+    for (int i = 0; i < channel_count; i++) {
+      close(channels[i].fd_read);
+      close(channels[i].fd_write);
+    }
+    return Status(ErrOS);
+  }
+
   lock_metapage();
-  init_metapage(filesize() == 0);
+  Status result = init_metapage(stat.st_size == 0);
   unlock_metapage();
+  if (!result) {
+    for (int i = 0; i < MAX_PROCESS; i++) {
+      close(channels[i].fd_read);
+      close(channels[i].fd_write);
+    }
+    return result;
+  }
   freelist = metapage->freelist;
   return Status(ErrNone);
 }
 
 Status VMem::init() {
   FILE *fp = tmpfile();
+  if (fp == NULL)
+    return Status(ErrFile);
   Status result = init(fileno(fp));
-  if (!result.ok())
+  if (!result.ok()) {
+    fclose(fp);
     return result;
+  }
   current_process = 0;
   file_handle = fp;
   metapage->process_info[0].pid = getpid();
@@ -99,7 +122,11 @@ Status VMem::init(const char *path) {
   int fd = open(path, O_RDWR | O_CREAT, 0600);
   if (fd < 0)
     return Status(ErrFile);
-  init(fd);
+  Status result = init(fd);
+  if (!result) {
+    close(fd);
+    return result;
+  }
   lock_metapage();
   // TODO: enter process in meta table
   unlock_metapage();
@@ -474,11 +501,14 @@ void unlock_metapage() {
   unlock_file(vmem.fd, 0);
 }
 
-void init_metapage(bool create) {
-  if (create)
-    ftruncate(vmem.fd, METABLOCK_SIZE);
-  vmem.metapage = (MetaPage *) mmap(
+Status init_metapage(bool create) {
+  if (create && ftruncate(vmem.fd, METABLOCK_SIZE) < 0)
+    return Status(ErrOS);
+  void *map = mmap(
       NULL, METABLOCK_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, vmem.fd, 0);
+  if (map == MAP_FAILED)
+    return Status(ErrMMap);
+  vmem.metapage = (MetaPage *) map;
   if (create) {
     std::memcpy(vmem.metapage->config_header, config, sizeof(config));
     for (int i = 0; i <= LOG2_SEGMENT_SIZE; i++) {
@@ -486,10 +516,13 @@ void init_metapage(bool create) {
     }
     vmem.metapage->segment_count = 0;
     vmem.metapage->allocator_lock = FastLock(metapageaddr(allocator_lock));
-  } else {
-    assert(std::memcmp(vmem.metapage->config_header, config,
-        sizeof(config)) != 0);
+  } else if (std::memcmp(vmem.metapage->config_header, config,
+      sizeof(config)) != 0) {
+    munmap(vmem.metapage, METABLOCK_SIZE);
+    vmem.metapage = NULL;
+    return Status(ErrGeneral);
   }
+  return Status(ErrNone);
 }
 
 static void lock_process(int processno) {
