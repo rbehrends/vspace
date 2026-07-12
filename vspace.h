@@ -1107,7 +1107,7 @@ public:
     enqueue_nowait(item);
   }
   bool try_enqueue(T item) {
-    if (_bounded && _outgoing.try_wait()) {
+    if (!_bounded || _outgoing.try_wait()) {
       enqueue_nowait(item);
       return true;
     } else {
@@ -1285,10 +1285,15 @@ public:
   EnqueueEvent(VRef<Queue<T> > queue) : _queue(queue) {
   }
   virtual bool start_listen(internals::ipc_signal_t sig) {
+    if (!_queue->_bounded) {
+      internals::send_signal(internals::vmem.current_process, sig);
+      return false;
+    }
     return _queue->_outgoing.start_wait(sig);
   }
   virtual void stop_listen() {
-    _queue->_outgoing.stop_wait();
+    if (_queue->_bounded)
+      _queue->_outgoing.stop_wait();
   }
   void complete(T item) {
     _queue->enqueue_nowait(item);
