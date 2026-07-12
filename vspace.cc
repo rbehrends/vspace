@@ -451,21 +451,18 @@ pid_t fork_process() {
 }
 
 void Semaphore::post() {
-  int wakeup = -1;
-  internals::ipc_signal_t sig;
   _lock.lock();
-  if (_head == _tail) {
-    _value++;
-  } else {
-    // don't increment value, as we'll pass that on to the next process.
-    wakeup = _waiting[_head];
-    sig = _signals[_head];
+  while (_head != _tail) {
+    int wakeup = _waiting[_head];
+    internals::ipc_signal_t sig = _signals[_head];
     next(_head);
+    if (internals::send_signal(wakeup, sig)) {
+      _lock.unlock();
+      return;
+    }
   }
+  _value++;
   _lock.unlock();
-  if (wakeup >= 0) {
-    internals::send_signal(wakeup, sig);
-  }
 }
 
 bool Semaphore::try_wait() {
