@@ -14,6 +14,12 @@ $(shell mkdir -p $(BLD) $(BIN))
 
 all: $(EXE)
 
+test: all
+	@set -e; for test in $(EXE); do \
+		echo "Running $$test"; \
+		$$test; \
+	done
+
 $(EXE): $(BIN)/%: $(BLD)/%.o $(LIB)
 	$(CXX) -g -o $@ $+
 $(OBJ): $(BLD)/%.o: $(TESTS)/%.cc $(HEADERS)
@@ -24,4 +30,4 @@ $(LIB): $(BLD)/%.o: %.cc $(HEADERS)
 clean:
 	rm -rf $(BLD) $(BIN)
 
-.PHONY: clean
+.PHONY: all test clean
