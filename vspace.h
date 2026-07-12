@@ -1102,6 +1102,21 @@ public:
       _tail(),
       _lock() {
   }
+  ~Queue() {
+    clear();
+  }
+  void clear() {
+    if (!_incoming.try_wait())
+      return;
+    do {
+      _lock.lock();
+      VRef<Node> node = pop();
+      _lock.unlock();
+      node.free();
+      if (_bounded)
+        _outgoing.post();
+    } while (_incoming.try_wait());
+  }
   void enqueue(T item) {
     if (_bounded)
       _outgoing.wait();
