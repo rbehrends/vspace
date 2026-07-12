@@ -335,13 +335,13 @@ void init_metapage(bool create) {
 static void lock_process(int processno) {
   lock_file(vmem.fd,
       metapageaddr(process_info)
-          + sizeof(ProcessInfo) * vmem.current_process);
+          + sizeof(ProcessInfo) * processno);
 }
 
 static void unlock_process(int processno) {
   unlock_file(vmem.fd,
       metapageaddr(process_info)
-          + sizeof(ProcessInfo) * vmem.current_process);
+          + sizeof(ProcessInfo) * processno);
 }
 
 static ProcessInfo &process_info(int processno) {
