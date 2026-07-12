@@ -26,7 +26,7 @@ int main() {
   VStr nstr[n];
   for (int i = 0; i < n; i++) {
     char buf[10];
-    sprintf(buf, "%d", i);
+    std::snprintf(buf, sizeof(buf), "%d", i);
     nstr[i] = vstring(buf);
     dict->add(nstr[i], nstr[i]);
   }
