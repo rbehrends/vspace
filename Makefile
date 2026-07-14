@@ -1,6 +1,6 @@
 CXXSTD=c++11
 OPT=-g
-CXXFLAGS=$(OPT) -std=$(CXXSTD)
+CXXFLAGS=$(OPT) -std=$(CXXSTD) -pthread
 BLD=build
 BIN=bin
 LIB=$(BLD)/vspace.o
@@ -21,7 +21,7 @@ test: all
 	done
 
 $(EXE): $(BIN)/%: $(BLD)/%.o $(LIB)
-	$(CXX) -g -o $@ $+
+	$(CXX) -g -pthread -o $@ $+
 $(OBJ): $(BLD)/%.o: $(TESTS)/%.cc $(HEADERS)
 	$(CXX) $(CXXFLAGS) -I. -c -o $@ $<
 $(LIB): $(BLD)/%.o: %.cc $(HEADERS)

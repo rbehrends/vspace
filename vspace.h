@@ -1,15 +1,19 @@
 #include <fcntl.h>
 #include <cstdio>
 #include <cstring>
+#include <cerrno>
 #include <assert.h>
 #include <new> // for placement new
+#include <pthread.h>
+#include <stdint.h>
+#include <unistd.h>
 
-#if __cplusplus >= 201100
-#define HAVE_CPP_THREADS
+#if __cplusplus >= 201103L
 #include <atomic>
-#else
-#undef HAVE_CPP_THREADS
 #endif
+
+
+
 
 // VSpace is a C++ library designed to allow processes in a
 // multi-process environment to interoperate via mmapped shared memory.
@@ -70,6 +74,21 @@ struct Status {
 
 namespace internals {
 
+template <typename T>
+struct AlignmentOf {
+  struct Helper {
+    char prefix;
+    T object;
+  };
+  enum { value = offsetof(Helper, object) };
+};
+
+#if __cplusplus >= 201103L
+#define VSPACE_ALIGNOF(T) alignof(T)
+#else
+#define VSPACE_ALIGNOF(T) AlignmentOf<T>::value
+#endif
+
 typedef size_t segaddr_t;
 
 typedef size_t vaddr_t;
@@ -85,107 +104,146 @@ static const size_t MAX_SEGMENTS = size_t(1) << LOG2_MAX_SEGMENTS;
 static const size_t SEGMENT_SIZE = size_t(1) << LOG2_SEGMENT_SIZE;
 static const size_t SEGMENT_MASK = (SEGMENT_SIZE - 1);
 
-// This is a very basic spinlock implementation that does not guarantee
-// fairness.
-//
-// TODO: add a wait queue and/or use futexes on Linux.
-class FastLock {
+void pthread_fatal(const char *operation, int error);
+
+class SharedMutex {
 private:
-#ifdef HAVE_CPP_THREADS
-  std::atomic_flag _lock;
-  short _owner, _head, _tail;
-#else
-  vaddr_t _offset;
-#endif
+  pthread_mutex_t _mutex;
+  SharedMutex(const SharedMutex &);
+  SharedMutex &operator=(const SharedMutex &);
 public:
-#ifdef HAVE_CPP_THREADS
-  FastLock(vaddr_t offset = 0) : _owner(-1), _head(-1), _tail(-1) {
-    _lock.clear();
-  }
-#else
-  FastLock(vaddr_t offset = 0) : _offset(offset) {
-  }
-#endif
-#ifdef HAVE_CPP_THREADS
-  // We only need to define the copy constructur for the
-  // atomic version, as the std::atomic_flag constructor
-  // is deleted.
-  FastLock(const FastLock &other) {
-    _owner = other._owner;
-    _head = other._head;
-    _tail = other._tail;
-    _lock.clear();
-  }
-  FastLock &operator=(const FastLock &other) {
-    _owner = other._owner;
-    _head = other._head;
-    _tail = other._tail;
-    _lock.clear();
-    return *this;
-  }
-#endif
+  explicit SharedMutex(bool recursive = false);
+  ~SharedMutex();
   void lock();
   void unlock();
+  pthread_mutex_t *native_handle() { return &_mutex; }
 };
 
-extern size_t config[4];
+class SharedCondition {
+private:
+  pthread_cond_t _condition;
+  SharedCondition(const SharedCondition &);
+  SharedCondition &operator=(const SharedCondition &);
+public:
+  SharedCondition();
+  ~SharedCondition();
+  void wait(SharedMutex &mutex);
+  void signal();
+  void broadcast();
+};
 
-void init_flock_struct(
-    struct flock &lock_info, size_t offset, size_t len, bool lock);
-void lock_file(int fd, size_t offset, size_t len = 1);
-void unlock_file(int fd, size_t offset, size_t len = 1);
 
-void lock_metapage();
+
+bool lock_metapage();
 void unlock_metapage();
+void lock_refcount(vaddr_t vaddr);
+void unlock_refcount(vaddr_t vaddr);
 Status init_metapage(bool create);
-
-typedef int ipc_signal_t;
-
-bool send_signal(int processno, ipc_signal_t sig = 0, bool lock = true);
-ipc_signal_t check_signal(bool resume = false, bool lock = true);
-void accept_signals();
-ipc_signal_t wait_signal(bool lock = true);
-void drop_pending_signals();
 
 struct Block;
 struct MetaPage;
-struct ProcessChannel;
 
-enum SignalState {
-  Waiting = 0,
-  Pending = 1,
-  Accepted = 2,
+enum SharedMemState {
+  SharedMemUninitialized = 0,
+  SharedMemInitializing = 1,
+  SharedMemInitialized = 2,
+};
+
+struct FileHeader {
+  uint32_t magic;
+  uint32_t version;
+  uint32_t init_state;
+  uint32_t header_size;
+  uint32_t metablock_size;
+  uint32_t max_process;
+  uint32_t segment_size;
+  uint32_t max_segments;
+  uint32_t size_t_size;
+  uint32_t pointer_size;
+  uint32_t pthread_mutex_size;
+  uint32_t pthread_mutex_align;
+  uint32_t pthread_cond_size;
+  uint32_t pthread_cond_align;
+  uint32_t layout_id;
+};
+
+enum ProcessState {
+  ProcessUnused = 0,
+  ProcessStarting = 1,
+  ProcessRunning = 2,
+};
+
+enum WaitState {
+  WaitIdle = 0,
+  WaitActive = 1,
+  WaitSelected = 2,
+};
+
+// An EventId instance identifies one candidate event in a wait selection.
+//
+// The `process_slot` and `process_incarnation` attributes identify the
+// waiting process instance. The `wait_sequence_id` attribute identifies a
+// particular wait selection by that process. The `event_index` attribute
+// identifies the candidate event within that selection.
+//
+// Copies may be registered with multiple event sources. try_select() allows
+// exactly one candidate to satisfy an active selection and rejects stale or
+// losing candidates.
+struct EventId {
+  int process_slot;
+  size_t process_incarnation;
+  size_t wait_sequence_id;
+  int event_index;
+};
+
+inline bool operator==(const EventId &left, const EventId &right) {
+  return left.process_slot == right.process_slot
+      && left.process_incarnation == right.process_incarnation
+      && left.wait_sequence_id == right.wait_sequence_id
+      && left.event_index == right.event_index;
+}
+
+struct WaitContext {
+  SharedMutex notify_mutex;
+  SharedCondition notify_condition;
+  WaitState state;
+  size_t sequence_id;
+  int selected_event;
+  WaitContext() : state(WaitIdle), sequence_id(0), selected_event(-1) { }
 };
 
 struct ProcessInfo {
   pid_t pid;
-  SignalState sigstate; // are there pending signals?
-  ipc_signal_t signal;
-#ifdef HAVE_CPP_THREADS
-  int next; // next in queue waiting for a lock.
-#endif
+  ProcessState slot_state;
+  size_t process_incarnation;
+  bool startup_acknowledged;
+  WaitContext wait_context;
+  ProcessInfo() : pid(0), slot_state(ProcessUnused), process_incarnation(0),
+      startup_acknowledged(false), wait_context() { }
 };
 
 struct MetaPage {
-  size_t config_header[4];
-  FastLock allocator_lock;
+  FileHeader header;
+  SharedMutex allocator_lock;
+  SharedMutex process_table_mutex;
+  SharedCondition process_startup_condition;
   vaddr_t freelist[LOG2_SEGMENT_SIZE + 1];
   int segment_count;
   ProcessInfo process_info[MAX_PROCESS];
 };
 
-// We use pipes/fifos to signal processes. For each process, fd_read is
-// where the process reads from and fd_write is where other processes
-// signal the reading process. Only single bytes are sent across each
-// channel. Because the effect of concurrent writes is undefined, bytes
-// must only be written by a single process at the time. This is usually
-// the case when the sending process knows that the receiving process is
-// waiting for a resource that the sending process currently holds. See
-// the Semaphore implementation for an example.
-
-struct ProcessChannel {
-  int fd_read, fd_write;
+enum EventSelection {
+  EventQueued,
+  EventAlreadyQueued,
+  EventSelected,
+  EventAlreadySelected,
 };
+
+// cooperative waiting mechanism
+EventId join_selection(int event_index = 0);
+bool try_select(const EventId &id);
+int await_selection(const EventId &id);
+void leave_selection(const EventId &id);
 
 struct Block {
   // the lowest bits of prev encode whether we are looking at an
@@ -238,6 +296,15 @@ struct Block {
   }
 };
 
+#if __cplusplus >= 201103L
+static_assert(offsetof(Block, data) % VSPACE_ALIGNOF(pthread_mutex_t) == 0,
+    "VSpace allocations must align pthread mutexes");
+static_assert(offsetof(Block, data) % VSPACE_ALIGNOF(pthread_cond_t) == 0,
+    "VSpace allocations must align pthread conditions");
+static_assert(sizeof(MetaPage) <= METABLOCK_SIZE,
+    "MetaPage must fit in the fixed metapage allocation");
+#endif
+
 struct VSeg {
   unsigned char *base;
   inline bool is_free() {
@@ -267,7 +334,6 @@ struct VMem {
   int current_process; // index into process table
   vaddr_t *freelist; // reference to metapage information
   VSeg segments[MAX_SEGMENTS];
-  ProcessChannel channels[MAX_PROCESS];
   inline VSeg segment(vaddr_t vaddr) {
     return segments[vaddr >> LOG2_SEGMENT_SIZE];
   }
@@ -313,41 +379,27 @@ inline Block *block_ptr(vaddr_t vaddr) {
   return vmem.block_ptr(vaddr);
 }
 
-#ifdef HAVE_CPP_THREADS
+#if __cplusplus >= 201103L
 struct refcount_t {
   std::atomic<ptrdiff_t> rc;
-  refcount_t(ptrdiff_t init) : rc(init) {
-  }
-  ptrdiff_t inc(vaddr_t vaddr) {
-    rc++;
-    return (ptrdiff_t) rc;
-  }
-  ptrdiff_t dec(vaddr_t vaddr) {
-    rc--;
-    return (ptrdiff_t) rc;
-  }
+  refcount_t(ptrdiff_t init) : rc(init) { }
+  ptrdiff_t inc(vaddr_t) { return ++rc; }
+  ptrdiff_t dec(vaddr_t) { return --rc; }
 };
 #else
 struct refcount_t {
   ptrdiff_t rc;
-  static void lock(vaddr_t vaddr) {
-    lock_file(vmem.fd, METABLOCK_SIZE + vaddr);
-  }
-  static void unlock(vaddr_t vaddr) {
-    unlock_file(vmem.fd, METABLOCK_SIZE + vaddr);
-  }
-  refcount_t(ptrdiff_t init) : rc(init) {
-  }
+  refcount_t(ptrdiff_t init) : rc(init) { }
   ptrdiff_t inc(vaddr_t vaddr) {
-    lock(vaddr);
+    lock_refcount(vaddr);
     ptrdiff_t result = ++rc;
-    unlock(vaddr);
+    unlock_refcount(vaddr);
     return result;
   }
   ptrdiff_t dec(vaddr_t vaddr) {
-    lock(vaddr);
+    lock_refcount(vaddr);
     ptrdiff_t result = --rc;
-    unlock(vaddr);
+    unlock_refcount(vaddr);
     return result;
   }
 };
@@ -390,36 +442,6 @@ static inline vaddr_t allocated_ptr_to_vaddr(void *ptr) {
   size_t offset = (unsigned char *) ptr - segstart;
   return (seg << LOG2_SEGMENT_SIZE) | offset;
 }
-
-class Mutex {
-private:
-  int _owner;
-  int _locklevel;
-  vaddr_t _lock;
-
-public:
-  Mutex() : _owner(-1), _locklevel(0), _lock(vmem_alloc(1)) {
-  }
-  ~Mutex() {
-    vmem_free(_lock);
-  }
-  void lock() {
-    if (_owner == vmem.current_process) {
-      _locklevel++;
-    } else {
-      lock_file(vmem.fd, METABLOCK_SIZE + _lock);
-      _owner = vmem.current_process;
-      _locklevel = 1;
-    }
-  }
-  void unlock() {
-    if (--_locklevel == 0) {
-      assert(_owner == vmem.current_process);
-      _owner = -1;
-      unlock_file(vmem.fd, METABLOCK_SIZE + _lock);
-    }
-  }
-};
 
 }; // namespace internals
 
@@ -637,7 +659,7 @@ struct ZRef {
 private:
   struct RefCounted {
     internals::refcount_t rc;
-#if __cplusplus >= 201100
+#if __cplusplus >= 201103L
     alignas(T) char data[sizeof(T)];
 #else
     union Storage {
@@ -650,7 +672,7 @@ private:
     RefCounted() : rc(1) {
     }
     char *data_ptr() {
-#if __cplusplus >= 201100
+#if __cplusplus >= 201103L
       return data;
 #else
       return storage.data;
@@ -861,7 +883,7 @@ private:
     VRef<V> value;
   };
   VRef<VRef<Node> > _buckets;
-  VRef<internals::FastLock> _locks;
+  VRef<internals::SharedMutex> _locks;
   size_t _nbuckets;
 
   void _lock_bucket(size_t b) {
@@ -904,10 +926,11 @@ VMap<Spec>::VMap(size_t size) {
   while (_nbuckets < size)
     _nbuckets *= 2;
   _buckets = vnew_array<VRef<Node> >(_nbuckets);
-  _locks = vnew_uninitialized_array<FastLock>(_nbuckets);
+  _locks = vnew_uninitialized_array<internals::SharedMutex>(_nbuckets);
   for (size_t i = 0; i < _nbuckets; i++)
-    _locks[i]
-        = FastLock(METABLOCK_SIZE + _locks.offset() + sizeof(FastLock) * i);
+    new (_locks.as_ptr() + i) internals::SharedMutex();
+  internals::mark_as_constructed(
+      _locks.offset(), _nbuckets * sizeof(internals::SharedMutex));
 }
 
 template <typename Spec>
@@ -1072,46 +1095,41 @@ typedef VMap<DictSpec> VDict;
 
 pid_t fork_process();
 
-#ifdef HAVE_CPP_THREADS
-typedef internals::FastLock FastLock;
-#else
-typedef internals::Mutex FastLock;
-#endif
-
-typedef internals::Mutex Mutex;
+class Mutex {
+private:
+  internals::SharedMutex _mutex;
+  Mutex(const Mutex &);
+  Mutex &operator=(const Mutex &);
+public:
+  Mutex() : _mutex(true) { }
+  void lock() { _mutex.lock(); }
+  void unlock() { _mutex.unlock(); }
+};
 
 class Semaphore {
 private:
-  int _owner;
-  int _waiting[internals::MAX_PROCESS + 1];
-  internals::ipc_signal_t _signals[internals::MAX_PROCESS + 1];
+  internals::EventId _waiting[internals::MAX_PROCESS + 1];
   int _head, _tail;
-  void next(int &index) {
+  void next(int &index) const {
     if (index == internals::MAX_PROCESS)
       index = 0;
     else
       index++;
   }
   size_t _value;
-  FastLock _lock;
-  bool _idle() {
-    return _head == _tail;
-  }
-  template <typename T>
-  friend class SyncVar;
+  internals::SharedMutex _lock;
+  bool _idle() const { return _head == _tail; }
 
 public:
-  Semaphore(size_t value = 0) :
-      _owner(0), _head(0), _tail(0), _value(value), _lock() {
-  }
-  size_t value() {
-    return _value;
-  }
+  explicit Semaphore(size_t value = 0) :
+      _head(0), _tail(0), _value(value), _lock() { }
+  size_t value();
   void post();
   bool try_wait();
   void wait();
-  bool start_wait(internals::ipc_signal_t sig = 0);
-  bool stop_wait();
+  internals::EventSelection start_wait(
+      const internals::EventId &id);
+  bool stop_wait(const internals::EventId &id);
 };
 
 template <typename T>
@@ -1124,7 +1142,7 @@ private:
   Semaphore _incoming;
   Semaphore _outgoing;
   bool _bounded;
-  FastLock _lock;
+  internals::SharedMutex _lock;
   VRef<Node> _head, _tail;
   VRef<Node> pop() {
     VRef<Node> result = _head;
@@ -1221,80 +1239,86 @@ public:
 template <typename T>
 class SyncVar {
 private:
-  FastLock _lock;
-  VRef<Semaphore> _sem;
+  internals::SharedMutex _lock;
+  internals::SharedCondition _readers;
+  internals::EventId _waiting[internals::MAX_PROCESS];
+  size_t _waiter_count;
   bool _set;
   T _value;
   template <typename U>
   friend class SyncReadEvent;
-  bool start_wait(internals::ipc_signal_t sig);
-  void stop_wait();
+  internals::EventSelection start_wait(
+      const internals::EventId &id);
+  bool stop_wait(const internals::EventId &id);
+  T complete_read();
 public:
-  SyncVar() : _set(false) { }
+  SyncVar() : _lock(), _readers(), _waiter_count(0), _set(false) { }
   T read();
   Result<T> try_read();
   bool write(T value);
-  bool test() {
-    return _set;
-  }
+  bool test();
 };
 
 template <typename T>
-bool SyncVar<T>::start_wait(internals::ipc_signal_t sig) {
+internals::EventSelection SyncVar<T>::start_wait(
+    const internals::EventId &id) {
   _lock.lock();
   if (_set) {
-    internals::send_signal(internals::vmem.current_process, sig);
+    bool selected = internals::try_select(id);
     _lock.unlock();
-    return true;
+    return selected ? internals::EventSelected
+                    : internals::EventAlreadySelected;
   }
-  if (_sem.is_null()) {
-    _sem = vnew<Semaphore>();
+  for (size_t i = 0; i < _waiter_count; i++) {
+    if (_waiting[i].process_slot == id.process_slot
+        && _waiting[i].process_incarnation == id.process_incarnation
+        && _waiting[i].wait_sequence_id == id.wait_sequence_id) {
+      _lock.unlock();
+      return internals::EventAlreadyQueued;
+    }
   }
-  bool result = _sem->start_wait(sig);
+  if (_waiter_count == internals::MAX_PROCESS) {
+    _lock.unlock();
+    internals::pthread_fatal("SyncVar waiter queue full", EOVERFLOW);
+  }
+  _waiting[_waiter_count++] = id;
   _lock.unlock();
-  return result;
+  return internals::EventQueued;
 }
 
 template <typename T>
-void SyncVar<T>::stop_wait() {
+bool SyncVar<T>::stop_wait(const internals::EventId &id) {
   _lock.lock();
-  if (!_sem.is_null()) {
-    _sem->stop_wait();
-    if (!_sem->_idle())
-      _sem->post();
+  for (size_t i = 0; i < _waiter_count; i++) {
+    if (_waiting[i] == id) {
+      for (size_t j = i + 1; j < _waiter_count; j++)
+        _waiting[j - 1] = _waiting[j];
+      _waiter_count--;
+      _lock.unlock();
+      return true;
+    }
   }
   _lock.unlock();
+  return false;
 }
 
 template <typename T>
 T SyncVar<T>::read() {
   _lock.lock();
-  if (_set) {
-    _lock.unlock();
-    return _value;
-  }
-  if (_sem.is_null()) {
-    _sem = vnew<Semaphore>();
-  }
-  // We can't wait inside the lock without deadlocking; but waiting outside
-  // could cause a race condition with _sem being freed due to being idle.
-  // Thus, we use start_wait() to insert ourselves into the queue, then
-  // use wait_signal() outside the lock to complete waiting.
-  //
-  // Note: start_wait() will not send a signal to self, as _set is
-  // false and therefore _sem->value() must be zero.
-  _sem->start_wait(0);
+  while (!_set)
+    _readers.wait(_lock);
+  T result = _value;
   _lock.unlock();
-  internals::wait_signal();
+  return result;
+}
+
+template <typename T>
+T SyncVar<T>::complete_read() {
   _lock.lock();
-  if (!_sem->_idle())
-    _sem->post();
-  else {
-    _sem.free();
-    _sem = vnull<Semaphore>();
-  }
+  assert(_set);
+  T result = _value;
   _lock.unlock();
-  return _value;
+  return result;
 }
 
 template <typename T>
@@ -1312,21 +1336,36 @@ bool SyncVar<T>::write(T value) {
     _lock.unlock();
     return false;
   }
-  _set = true;
   _value = value;
-  if (!_sem.is_null() && !_sem->_idle())
-    _sem->post();
+  _set = true;
+  for (size_t i = 0; i < _waiter_count; i++)
+    internals::try_select(_waiting[i]);
+  _waiter_count = 0;
+  _readers.broadcast();
   _lock.unlock();
   return true;
+}
+
+template <typename T>
+bool SyncVar<T>::test() {
+  _lock.lock();
+  bool result = _set;
+  _lock.unlock();
+  return result;
 }
 
 class Event {
 private:
   Event *_next;
+  bool _registered;
+  internals::EventId _id;
   friend class EventSet;
 public:
-  virtual bool start_listen(internals::ipc_signal_t sig) = 0;
-  virtual void stop_listen() = 0;
+  Event() : _next(NULL), _registered(false) { }
+  virtual ~Event() { }
+  virtual internals::EventSelection start_listen(
+      const internals::EventId &id) = 0;
+  virtual void stop_listen(const internals::EventId &id) = 0;
 };
 
 class EventSet {
@@ -1358,11 +1397,12 @@ private:
 public:
   WaitSemaphoreEvent(VRef<Semaphore> sem) : _sem(sem) {
   }
-  virtual bool start_listen(internals::ipc_signal_t sig) {
-    return _sem->start_wait(sig);
+  virtual internals::EventSelection start_listen(
+      const internals::EventId &id) {
+    return _sem->start_wait(id);
   }
-  virtual void stop_listen() {
-    _sem->stop_wait();
+  virtual void stop_listen(const internals::EventId &id) {
+    _sem->stop_wait(id);
   }
   void complete() {
   }
@@ -1376,16 +1416,17 @@ private:
 public:
   EnqueueEvent(VRef<Queue<T> > queue) : _queue(queue) {
   }
-  virtual bool start_listen(internals::ipc_signal_t sig) {
-    if (!_queue->_bounded) {
-      internals::send_signal(internals::vmem.current_process, sig);
-      return false;
-    }
-    return _queue->_outgoing.start_wait(sig);
+  virtual internals::EventSelection start_listen(
+      const internals::EventId &id) {
+    if (!_queue->_bounded)
+      return internals::try_select(id)
+          ? internals::EventSelected
+          : internals::EventAlreadySelected;
+    return _queue->_outgoing.start_wait(id);
   }
-  virtual void stop_listen() {
+  virtual void stop_listen(const internals::EventId &id) {
     if (_queue->_bounded)
-      _queue->_outgoing.stop_wait();
+      _queue->_outgoing.stop_wait(id);
   }
   void complete(T item) {
     _queue->enqueue_nowait(item);
@@ -1400,11 +1441,12 @@ private:
 public:
   DequeueEvent(VRef<Queue<T> > queue) : _queue(queue) {
   }
-  virtual bool start_listen(internals::ipc_signal_t sig) {
-    return _queue->_incoming.start_wait(sig);
+  virtual internals::EventSelection start_listen(
+      const internals::EventId &id) {
+    return _queue->_incoming.start_wait(id);
   }
-  virtual void stop_listen() {
-    _queue->_incoming.stop_wait();
+  virtual void stop_listen(const internals::EventId &id) {
+    _queue->_incoming.stop_wait(id);
   }
   T complete() {
     return _queue->dequeue_nowait();
@@ -1419,14 +1461,15 @@ private:
 public:
   SyncReadEvent(VRef<SyncVar<T> > syncvar) : _syncvar(syncvar) {
   }
-  virtual bool start_listen(internals::ipc_signal_t sig) {
-    return _syncvar->start_wait(sig);
+  virtual internals::EventSelection start_listen(
+      const internals::EventId &id) {
+    return _syncvar->start_wait(id);
   }
-  virtual void stop_listen() {
-    _syncvar->stop_wait();
+  virtual void stop_listen(const internals::EventId &id) {
+    _syncvar->stop_wait(id);
   }
   T complete() {
-    return _syncvar->read();
+    return _syncvar->complete_read();
   }
 };
 

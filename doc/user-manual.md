@@ -21,7 +21,7 @@ In order to faciliate shared memory and interprocess communication, VSpace uses 
 
 C++ classes provide the necessary abstractions over the implementation details.
 
-VSPace is very portable, relying only on `mmap()`, `munmap()`, file locking via `fcntl()` and `pipe()`. Where available (such as C++11 `std::atomic`), it may use alternative implementations, especially for faster locking (as `fcntl()` is comparatively slow due to always requiring a kernel call).
+VSPace is very portable, relying only on `mmap()`, `munmap()`, file locking via `fcntl()` and shared pthread mutexes and condition variables. Where available (such as C++11 `std::atomic`), it may use alternative implementations, especially for faster reference counts (as `fcntl()` is comparatively slow due to always requiring a kernel call).
 
 The basic idea is that after having initialized VSpace and having done any preparatory work that all processes rely upon, we then fork a number of worker processes that will communicate with each other or with the main process through VSpace primitives.
 

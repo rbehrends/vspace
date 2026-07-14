@@ -33,7 +33,7 @@ int main() {
   status = vmem.init(fd);
   close(fd);
   unlink(short_path);
-  if (status.err != ErrMMap)
+  if (status.err != ErrOS)
     return 1;
 
   if (!vmem_init())
