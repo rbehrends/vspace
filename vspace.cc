@@ -533,18 +533,30 @@ void unlock_metapage() {
   }
 }
 
-void lock_refcount(vaddr_t vaddr) {
-  if (set_file_lock(METABLOCK_SIZE + vaddr, F_WRLCK) < 0) {
-    perror("vspace: reference-count lock");
-    abort();
-  }
+#if __cplusplus < 201103L
+static size_t hash_vaddr(vaddr_t vaddr) {
+  const size_t half_width = sizeof(size_t) * CHAR_BIT / 2;
+  size_t hash = vaddr ^ (vaddr >> half_width);
+  hash *= size_t(0x9e3779b9UL);
+  hash ^= hash >> half_width;
+  return hash & (REFCOUNT_NUM_LOCKS - 1);
+}
+#endif
+
+void hash_lock(vaddr_t vaddr) {
+#if __cplusplus < 201103L
+  vmem.metapage->refcount_locks[hash_vaddr(vaddr)].lock();
+#else
+  (void) vaddr;
+#endif
 }
 
-void unlock_refcount(vaddr_t vaddr) {
-  if (set_file_lock(METABLOCK_SIZE + vaddr, F_UNLCK) < 0) {
-    perror("vspace: reference-count unlock");
-    abort();
-  }
+void hash_unlock(vaddr_t vaddr) {
+#if __cplusplus < 201103L
+  vmem.metapage->refcount_locks[hash_vaddr(vaddr)].unlock();
+#else
+  (void) vaddr;
+#endif
 }
 
 static FileHeader create_file_header(SharedMemState state) {
@@ -603,6 +615,10 @@ Status init_metapage(bool create) {
     new (&vmem.metapage->allocator_lock) SharedMutex();
     new (&vmem.metapage->process_table_mutex) SharedMutex();
     new (&vmem.metapage->process_startup_condition) SharedCondition();
+#if __cplusplus < 201103L
+    for (size_t i = 0; i < REFCOUNT_NUM_LOCKS; i++)
+      new (&vmem.metapage->refcount_locks[i]) SharedMutex();
+#endif
     for (int i = 0; i <= LOG2_SEGMENT_SIZE; i++)
       vmem.metapage->freelist[i] = VADDR_NULL;
     vmem.metapage->segment_count = 0;

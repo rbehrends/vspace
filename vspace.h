@@ -98,6 +98,8 @@ const vaddr_t VADDR_NULL = ~(segaddr_t) 0;
 
 static const int MAX_PROCESS = 64;
 static const size_t METABLOCK_SIZE = 128 * 1024; // 128 KB
+static const unsigned REFCOUNT_LOCK_BITS = 8;
+static const size_t REFCOUNT_NUM_LOCKS = 1 << REFCOUNT_LOCK_BITS;
 static const int LOG2_SEGMENT_SIZE = 28; // 256 MB
 static const int LOG2_MAX_SEGMENTS = 10; // 256 GB
 static const size_t MAX_SEGMENTS = size_t(1) << LOG2_MAX_SEGMENTS;
@@ -136,8 +138,8 @@ public:
 
 bool lock_metapage();
 void unlock_metapage();
-void lock_refcount(vaddr_t vaddr);
-void unlock_refcount(vaddr_t vaddr);
+void hash_lock(vaddr_t vaddr);
+void hash_unlock(vaddr_t vaddr);
 Status init_metapage(bool create);
 
 struct Block;
@@ -227,6 +229,9 @@ struct MetaPage {
   SharedMutex allocator_lock;
   SharedMutex process_table_mutex;
   SharedCondition process_startup_condition;
+#if __cplusplus < 201103L
+  SharedMutex refcount_locks[REFCOUNT_NUM_LOCKS];
+#endif
   vaddr_t freelist[LOG2_SEGMENT_SIZE + 1];
   int segment_count;
   ProcessInfo process_info[MAX_PROCESS];
@@ -303,6 +308,9 @@ static_assert(offsetof(Block, data) % VSPACE_ALIGNOF(pthread_cond_t) == 0,
     "VSpace allocations must align pthread conditions");
 static_assert(sizeof(MetaPage) <= METABLOCK_SIZE,
     "MetaPage must fit in the fixed metapage allocation");
+#else
+typedef char MetaPageMustFitInMetablock[
+    sizeof(MetaPage) <= METABLOCK_SIZE ? 1 : -1];
 #endif
 
 struct VSeg {
@@ -391,15 +399,15 @@ struct refcount_t {
   ptrdiff_t rc;
   refcount_t(ptrdiff_t init) : rc(init) { }
   ptrdiff_t inc(vaddr_t vaddr) {
-    lock_refcount(vaddr);
+    hash_lock(vaddr);
     ptrdiff_t result = ++rc;
-    unlock_refcount(vaddr);
+    hash_unlock(vaddr);
     return result;
   }
   ptrdiff_t dec(vaddr_t vaddr) {
-    lock_refcount(vaddr);
+    hash_lock(vaddr);
     ptrdiff_t result = --rc;
-    unlock_refcount(vaddr);
+    hash_unlock(vaddr);
     return result;
   }
 };
