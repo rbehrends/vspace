@@ -388,6 +388,10 @@ inline Block *block_ptr(vaddr_t vaddr) {
 }
 
 #if __cplusplus >= 201103L
+#if __cplusplus >= 201703L
+static_assert(std::atomic<ptrdiff_t>::is_always_lock_free,
+    "VSpace requires lock-free std::atomic<ptrdiff_t>");
+#endif
 struct refcount_t {
   std::atomic<ptrdiff_t> rc;
   refcount_t(ptrdiff_t init) : rc(init) { }
