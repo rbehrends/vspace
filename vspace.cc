@@ -466,6 +466,8 @@ void vmem_free(vaddr_t vaddr) {
 }
 
 vaddr_t vmem_alloc(size_t size) {
+  if (size == 0)
+    size = 1;
   const size_t overhead = offsetof(Block, data);
   if (size > SEGMENT_SIZE - overhead)
     allocation_failure(size);

@@ -13,7 +13,7 @@ int main() {
   if (!vmem_init() || !allocator_is_valid())
     return 1;
 
-  vaddr_t one = vmem_alloc(1);
+  vaddr_t one = vmem_alloc(0);
   if (!allocator_is_valid())
     return 1;
   vmem_free(one);
