@@ -835,6 +835,8 @@ ZRef<T> znew(Arg1 arg1, Arg2 arg2, Arg3 arg3) {
 
 class VString {
 private:
+  VString(const VString &);
+  VString &operator=(const VString &);
   VRef<char> _buffer;
   size_t _len;
 
