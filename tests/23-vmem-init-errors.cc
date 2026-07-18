@@ -5,7 +5,7 @@ int main() {
   using namespace vspace;
   using namespace vspace::internals;
 
-  if (vmem.init(-1).err != ErrOS)
+  if (vmem.init(-1).err != ErrOS || vmem.fd != -1)
     return 1;
 
   char empty_path[] = "/tmp/vspace-empty-XXXXXX";
@@ -19,7 +19,7 @@ int main() {
   Status status = vmem.init(fd);
   close(fd);
   unlink(empty_path);
-  if (status.err != ErrOS)
+  if (status.err != ErrOS || vmem.fd != -1)
     return 1;
 
   char short_path[] = "/tmp/vspace-short-XXXXXX";
@@ -33,11 +33,12 @@ int main() {
   status = vmem.init(fd);
   close(fd);
   unlink(short_path);
-  if (status.err != ErrOS)
+  if (status.err != ErrOS || vmem.fd != -1)
     return 1;
 
   if (!vmem_init())
     return 1;
   vmem_deinit();
-  return 0;
+  vmem_deinit();
+  return vmem.fd == -1 ? 0 : 1;
 }

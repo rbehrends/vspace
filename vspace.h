@@ -342,6 +342,8 @@ struct VMem {
   int current_process; // index into process table
   vaddr_t *freelist; // reference to metapage information
   VSeg segments[MAX_SEGMENTS];
+  VMem() : metapage(NULL), fd(-1), file_handle(NULL), current_process(-1),
+      freelist(NULL) { }
   inline VSeg segment(vaddr_t vaddr) {
     return segments[vaddr >> LOG2_SEGMENT_SIZE];
   }

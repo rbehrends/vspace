@@ -167,22 +167,28 @@ Status VMem::init(int fd) {
   freelist = NULL;
   for (int i = 0; i < MAX_SEGMENTS; i++)
     segments[i] = VSeg(NULL);
-  if (!lock_metapage())
+  if (!lock_metapage()) {
+    this->fd = -1;
     return Status(ErrOS);
+  }
   struct stat stat;
   if (fstat(fd, &stat) < 0) {
     unlock_metapage();
+    this->fd = -1;
     return Status(ErrOS);
   }
   Status result = init_metapage(stat.st_size == 0);
   unlock_metapage();
-  if (!result)
+  if (!result) {
+    this->fd = -1;
     return result;
+  }
   freelist = metapage->freelist;
   if (!register_process()) {
     munmap(metapage, METABLOCK_SIZE);
     metapage = NULL;
     freelist = NULL;
+    this->fd = -1;
     return Status(ErrGeneral);
   }
   return Status(ErrNone);
@@ -220,15 +226,17 @@ void VMem::deinit() {
       munmap(segments[i].base, SEGMENT_SIZE);
     segments[i] = VSeg(NULL);
   }
-  munmap(metapage, METABLOCK_SIZE);
+  if (metapage != NULL)
+    munmap(metapage, METABLOCK_SIZE);
   metapage = NULL;
   freelist = NULL;
   if (file_handle) {
     fclose(file_handle);
     file_handle = NULL;
-  } else {
+  } else if (fd >= 0) {
     close(fd);
   }
+  fd = -1;
 }
 
 void *VMem::mmap_segment(int seg) {
