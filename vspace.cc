@@ -463,6 +463,8 @@ vaddr_t vmem_alloc(size_t size) {
     allocation_failure(size);
 
   size_t alloc_size = size + overhead;
+  if (sizeof(size_t) == 4 && alloc_size > (size_t(1) << 23))
+    allocation_failure(size);
   int level = find_level(alloc_size);
   lock_allocator();
   int flevel = level;
