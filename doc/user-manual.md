@@ -101,6 +101,8 @@ New objects are created with the `vnew()` function instead of the `new` operator
 
 The `vnew()` function is more limited than the `new` operator in that it can currently only support a finite number of constructor arguments (at the moment, up to 3).
 
+VSpace allocations are aligned to `offsetof(Block, data)`, normally 16 bytes on 64-bit systems and 8 bytes on 32-bit systems. `VRef` and `ZRef` reject object types requiring an incompatible greater alignment at compile time. Instances of types with greater alignment can therefore not be stored in VSpace's shared memory.
+
 There are also `vnew_uninitialized()`, `vnew_array()`, and `vnew_uninitialized_array()` functions. The "uninitialized" versions do not call constructor or otherwise initialize the memory. The "array" versions return a virtual reference that addresses an array of items. The `vnew_array()` function requires that the type has a parameterless constructor.
 
         const int n = 10;

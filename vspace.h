@@ -80,7 +80,7 @@ struct AlignmentOf {
     char prefix;
     T object;
   };
-  enum { value = offsetof(Helper, object) };
+  enum { value = sizeof(Helper) - sizeof(T) };
 };
 
 #if __cplusplus >= 201103L
@@ -313,6 +313,18 @@ typedef char MetaPageMustFitInMetablock[
     sizeof(MetaPage) <= METABLOCK_SIZE ? 1 : -1];
 #endif
 
+template <typename T>
+inline void check_allocation_alignment() {
+#if __cplusplus >= 201103L
+  static_assert(offsetof(Block, data) % VSPACE_ALIGNOF(T) == 0,
+      "VSpace does not support this type's alignment");
+#else
+  typedef char VSpaceDoesNotSupportThisTypeAlignment[
+      offsetof(Block, data) % AlignmentOf<T>::value == 0 ? 1 : -1];
+  (void) sizeof(VSpaceDoesNotSupportThisTypeAlignment);
+#endif
+}
+
 struct VSeg {
   unsigned char *base;
   inline bool is_free() {
@@ -524,6 +536,7 @@ public:
     return VRef<U>::from_vaddr(vaddr);
   }
   static VRef<T> alloc(size_t n = 1) {
+    internals::check_allocation_alignment<T>();
     return VRef<T>(internals::vmem_alloc(n * sizeof(T)));
   }
   void free() {
@@ -827,6 +840,7 @@ public:
     destroy();
   }
   static ZRef<T> alloc(size_t n = 1) {
+    internals::check_allocation_alignment<RefCounted>();
     size_t size = data_offset() + n * sizeof(T);
     if (size < sizeof(RefCounted))
       size = sizeof(RefCounted);
