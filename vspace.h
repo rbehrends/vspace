@@ -590,6 +590,38 @@ public:
   }
 };
 
+namespace internals {
+
+template <typename T, typename Ref>
+class VMemConstructionGuard {
+private:
+  Ref _ref;
+  T *_ptr;
+  size_t _num_constructed;
+  bool _cleanup_required;
+  VMemConstructionGuard(const VMemConstructionGuard &);
+  VMemConstructionGuard &operator=(const VMemConstructionGuard &);
+
+public:
+  VMemConstructionGuard(Ref ref, T *ptr)
+      : _ref(ref), _ptr(ptr), _num_constructed(0), _cleanup_required(true) { }
+  ~VMemConstructionGuard() {
+    if (!_cleanup_required)
+      return;
+    while (_num_constructed > 0)
+      _ptr[--_num_constructed].~T();
+    _ref.free();
+  }
+  void element_constructed() {
+    _num_constructed++;
+  }
+  void commit() {
+    _cleanup_required = false;
+  }
+};
+
+} // namespace internals
+
 template <typename T>
 VRef<T> vnull() {
   return VRef<T>::from_vaddr(internals::VADDR_NULL);
@@ -598,8 +630,12 @@ VRef<T> vnull() {
 template <typename T>
 VRef<T> vnew() {
   VRef<T> result = VRef<T>::alloc();
-  new (result.to_ptr()) T();
+  T *ptr = result.as_ptr();
+  internals::VMemConstructionGuard<T, VRef<T> > guard(result, ptr);
+  new (ptr) T();
+  guard.element_constructed();
   internals::mark_as_constructed(result.offset(), sizeof(T));
+  guard.commit();
   return result;
 }
 
@@ -613,10 +649,13 @@ template <typename T>
 VRef<T> vnew_array(size_t n) {
   VRef<T> result = VRef<T>::alloc(n);
   T *ptr = result.as_ptr();
+  internals::VMemConstructionGuard<T, VRef<T> > guard(result, ptr);
   for (size_t i = 0; i < n; i++) {
     new (ptr + i) T();
+    guard.element_constructed();
   }
   internals::mark_as_constructed(result.offset(), n * sizeof(T));
+  guard.commit();
   return result;
 }
 
@@ -629,24 +668,36 @@ VRef<T> vnew_uninitialized_array(size_t n) {
 template <typename T, typename Arg>
 VRef<T> vnew(Arg arg) {
   VRef<T> result = VRef<T>::alloc();
-  new (result.to_ptr()) T(arg);
+  T *ptr = result.as_ptr();
+  internals::VMemConstructionGuard<T, VRef<T> > guard(result, ptr);
+  new (ptr) T(arg);
+  guard.element_constructed();
   internals::mark_as_constructed(result.offset(), sizeof(T));
+  guard.commit();
   return result;
 }
 
 template <typename T, typename Arg1, typename Arg2>
 VRef<T> vnew(Arg1 arg1, Arg2 arg2) {
   VRef<T> result = VRef<T>::alloc();
-  new (result.to_ptr()) T(arg1, arg2);
+  T *ptr = result.as_ptr();
+  internals::VMemConstructionGuard<T, VRef<T> > guard(result, ptr);
+  new (ptr) T(arg1, arg2);
+  guard.element_constructed();
   internals::mark_as_constructed(result.offset(), sizeof(T));
+  guard.commit();
   return result;
 }
 
 template <typename T, typename Arg1, typename Arg2, typename Arg3>
 VRef<T> vnew(Arg1 arg1, Arg2 arg2, Arg3 arg3) {
   VRef<T> result = VRef<T>::alloc();
-  new (result.to_ptr()) T(arg1, arg2, arg3);
+  T *ptr = result.as_ptr();
+  internals::VMemConstructionGuard<T, VRef<T> > guard(result, ptr);
+  new (ptr) T(arg1, arg2, arg3);
+  guard.element_constructed();
   internals::mark_as_constructed(result.offset(), sizeof(T));
+  guard.commit();
   return result;
 }
 
@@ -654,8 +705,12 @@ template <typename T, typename Arg1, typename Arg2, typename Arg3,
     typename Arg4>
 VRef<T> vnew(Arg1 arg1, Arg2 arg2, Arg3 arg3, Arg4 arg4) {
   VRef<T> result = VRef<T>::alloc();
-  new (result.to_ptr()) T(arg1, arg2, arg3, arg4);
+  T *ptr = result.as_ptr();
+  internals::VMemConstructionGuard<T, VRef<T> > guard(result, ptr);
+  new (ptr) T(arg1, arg2, arg3, arg4);
+  guard.element_constructed();
   internals::mark_as_constructed(result.offset(), sizeof(T));
+  guard.commit();
   return result;
 }
 
@@ -663,8 +718,12 @@ template <typename T, typename Arg1, typename Arg2, typename Arg3,
     typename Arg4, typename Arg5>
 VRef<T> vnew(Arg1 arg1, Arg2 arg2, Arg3 arg3, Arg4 arg4, Arg5 arg5) {
   VRef<T> result = VRef<T>::alloc();
-  new (result.to_ptr()) T(arg1, arg2, arg3, arg4, arg5);
+  T *ptr = result.as_ptr();
+  internals::VMemConstructionGuard<T, VRef<T> > guard(result, ptr);
+  new (ptr) T(arg1, arg2, arg3, arg4, arg5);
+  guard.element_constructed();
   internals::mark_as_constructed(result.offset(), sizeof(T));
+  guard.commit();
   return result;
 }
 
@@ -785,8 +844,12 @@ ZRef<T> znull() {
 template <typename T>
 ZRef<T> znew() {
   ZRef<T> result = ZRef<T>::alloc();
-  new (result.as_ptr()) T();
+  T *ptr = result.as_ptr();
+  internals::VMemConstructionGuard<T, ZRef<T> > guard(result, ptr);
+  new (ptr) T();
+  guard.element_constructed();
   internals::mark_as_constructed(result.offset(), sizeof(T));
+  guard.commit();
   return result;
 }
 
@@ -799,10 +862,13 @@ template <typename T>
 ZRef<T> znew_array(size_t n) {
   ZRef<T> result = ZRef<T>::alloc(n);
   T *ptr = result.as_ptr();
+  internals::VMemConstructionGuard<T, ZRef<T> > guard(result, ptr);
   for (size_t i = 0; i < n; i++) {
     new (ptr + i) T();
+    guard.element_constructed();
   }
   internals::mark_as_constructed(result.offset(), n * sizeof(T));
+  guard.commit();
   return result;
 }
 
@@ -814,24 +880,36 @@ ZRef<T> znew_uninitialized_array(size_t n) {
 template <typename T, typename Arg>
 ZRef<T> znew(Arg arg) {
   ZRef<T> result = ZRef<T>::alloc();
-  new (result.as_ptr()) T(arg);
+  T *ptr = result.as_ptr();
+  internals::VMemConstructionGuard<T, ZRef<T> > guard(result, ptr);
+  new (ptr) T(arg);
+  guard.element_constructed();
   internals::mark_as_constructed(result.offset(), sizeof(T));
+  guard.commit();
   return result;
 }
 
 template <typename T, typename Arg1, typename Arg2>
 ZRef<T> znew(Arg1 arg1, Arg2 arg2) {
   ZRef<T> result = ZRef<T>::alloc();
-  new (result.as_ptr()) T(arg1, arg2);
+  T *ptr = result.as_ptr();
+  internals::VMemConstructionGuard<T, ZRef<T> > guard(result, ptr);
+  new (ptr) T(arg1, arg2);
+  guard.element_constructed();
   internals::mark_as_constructed(result.offset(), sizeof(T));
+  guard.commit();
   return result;
 }
 
 template <typename T, typename Arg1, typename Arg2, typename Arg3>
 ZRef<T> znew(Arg1 arg1, Arg2 arg2, Arg3 arg3) {
   ZRef<T> result = ZRef<T>::alloc();
-  new (result.as_ptr()) T(arg1, arg2, arg3);
+  T *ptr = result.as_ptr();
+  internals::VMemConstructionGuard<T, ZRef<T> > guard(result, ptr);
+  new (ptr) T(arg1, arg2, arg3);
+  guard.element_constructed();
   internals::mark_as_constructed(result.offset(), sizeof(T));
+  guard.commit();
   return result;
 }
 
