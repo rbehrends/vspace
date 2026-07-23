@@ -961,6 +961,9 @@ public:
   VRef<VString> clone() const {
     return vnew<VString>(_buffer.as_ptr(), _len);
   }
+  char *str() {
+    return _buffer.as_ptr();
+  }
   const char *str() const {
     return _buffer.as_ptr();
   }
@@ -1097,8 +1100,6 @@ bool VMap<Spec>::add(VRef<K> key, VRef<V> value, VRef<K> &oldkey,
   node_ptr->value = value;
   node_ptr->next = _buckets[b];
   _buckets[b] = node;
-  oldkey = key;
-  oldvalue = value;
   _unlock_bucket(b);
   return true;
 }

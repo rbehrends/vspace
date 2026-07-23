@@ -737,8 +737,10 @@ pid_t fork_process() {
     }
   }
   metapage->process_table_mutex.unlock();
-  if (slot < 0)
+  if (slot < 0) {
+    errno = EAGAIN;
     return -1;
+  }
 
   pid_t pid = fork();
   if (pid < 0) {
