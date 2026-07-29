@@ -74,18 +74,23 @@ struct Status {
 
 namespace internals {
 
+#if __cplusplus >= 201103L
+#define VSPACE_ALIGNOF(T) alignof(T)
+#elif defined(__GNUC__) || defined(__clang__)
+#define VSPACE_ALIGNOF(T) __alignof__(T)
+#else
 template <typename T>
 struct AlignmentOf {
   struct Helper {
     char prefix;
     T object;
   };
+  // Trailing padding in Helper may make this a conservative estimate of T's
+  // alignment and may cause otherwise acceptable types to be rejected.
+  // However, this is the best fallback we can get for C++98 and lacking a
+  // gcc-compatible compiler.
   enum { value = sizeof(Helper) - sizeof(T) };
 };
-
-#if __cplusplus >= 201103L
-#define VSPACE_ALIGNOF(T) alignof(T)
-#else
 #define VSPACE_ALIGNOF(T) AlignmentOf<T>::value
 #endif
 
@@ -320,7 +325,7 @@ inline void check_allocation_alignment() {
       "VSpace does not support this type's alignment");
 #else
   typedef char VSpaceDoesNotSupportThisTypeAlignment[
-      offsetof(Block, data) % AlignmentOf<T>::value == 0 ? 1 : -1];
+      offsetof(Block, data) % VSPACE_ALIGNOF(T) == 0 ? 1 : -1];
   (void) sizeof(VSpaceDoesNotSupportThisTypeAlignment);
 #endif
 }
